@@ -1,0 +1,389 @@
+---
+title: "Notes on 'Analyzing US Census Data"
+author: "Rick Dean"
+format: 
+  html:
+    toc: false
+    toc-depth: 4
+    toc-location: "right"
+    number-sections: false
+    self-contained: true
+    smooth-scroll: true
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    code-overflow: wrap
+    tbl-cap-location: "bottom"
+    fig-width: 7
+    fig-asp: 0.6
+    fig-align: "center"
+    fig-cap-location: "bottom"
+    css: ../style.css
+    link-external-newwindow: true
+    callout-appearance: simple
+    callout-icon: false
+    callout-border-left: "#22CC00"
+    abstract-title: "Abstract"
+    abstract:  "The following are notes and R script based on Chapter 6 of the book [Analyzing US Census Data: Methods, Maps, and Models in R](https://walker-data.com/census-r/index.html) by Kyle Walker with its presentation of examples and exercises. This is part 2 of Chapter 6 starting in section 6.5, 'Interactive mapping'. The R packages [RcensusPkg](https://github.com/deandevl/RcensusPkg) and [data.table](https://cran.r-project.org/web/packages/data.table/index.html) are used in accessing and manipulating the data respectively. The tables are created by using the R package [RplotterPkg::create_table()](https://github.com/deandevl/RplotterPkg). The mapping of the geographic datasets (shapefiles) was accomplished using [RspatialPkg::get_geom_sf()](https://github.com/deandevl/RspatialPkg)"
+---
+
+
+:::topic
+Load the Required R Packages:
+:::
+
+```{r}
+#| warning: false
+#| message: false
+
+library(usmap)
+library(data.table)
+library(gt)
+library(purrr)
+library(ggplot2)
+library(shiny)
+library(here)
+library(sf)
+library(magrittr)
+library(httr)
+library(tmap)
+library(mapview)
+library(leaflet)
+library(leaflet.extras)
+library(ggiraph)
+library(ggplotify)
+library(RspatialPkg)
+library(RcensusPkg)
+library(RplotterPkg)
+```
+
+::: task
+Establish an output directory for all downloaded shapefiles.
+:::
+```{r}
+output_dir <- file.path(here(), "shapefiles")
+```
+
+## 6.5 Interactive mapping
+
+### 6.5.1 Interactive mapping with Leaflet
+
+::: task
+Get the percentage of the population aged 25 and up with a bachelor's degree or higher from the "acs/acs5/profile" dataset. Join the data with the geometry of Census tract in Dallas County, Texas. 
+:::
+
+Get a description of the variable "DP02_0068P":
+```{r}
+DP02_0068P_dt <- RcensusPkg::get_variable_names(
+  dataset = "acs/acs5/profile",
+  vintage = 2020,
+  filter_name_str = "DP02_0068P"
+)
+DP02_0068P_gt <- RplotterPkg::create_table(
+  x = DP02_0068P_dt,
+  container_width_px = 500
+)
+DP02_0068P_gt
+```
+
+Get the fips numbers:
+```{r}
+dallas_tx_fips <- usmap::fips(state = "texas", county = "dallas")
+dallas_cty_fips <- substr(dallas_tx_fips, 3, 5)
+texas_fips <- substr(dallas_tx_fips,1,2)
+```
+
+Get the Census data:
+```{r}
+dallas_college_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5/profile",
+  vintage = 2020,
+  vars = "DP02_0068PE",
+  region = "tract",
+  regionin = paste0("state:", texas_fips, "+county:", dallas_cty_fips)
+) %>%
+  data.table::setnames(., old = "DP02_0068PE", new = "estimate") %>%
+  .[, estimate := as.numeric(estimate)] %>%
+  .[estimate > 0,]
+```
+
+Get the geographies data and join the Census data percentages `dallas_college_dt`:
+
+```{r}
+express <- expression(COUNTYFP == dallas_cty_fips)
+dallas_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = texas_fips,
+  general = T,
+  express = express,
+  datafile = dallas_college_dt,
+  datafile_key = "GEOID",
+  output_dir = output_dir,
+  sf_info = F
+) %>% 
+  sf::st_transform(crs = "+proj=longlat +datum=WGS84")
+```
+
+::: task
+Map the data using `mapview`.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.22 Interactive mapview choropleth, acs/acs5/profile, 2020 
+
+dallas_tracts_mv <- mapview::mapView(dallas_tracts_sf, zcol = "estimate")
+dallas_tracts_mv@map %>% 
+  leaflet.extras::addFullscreenControl()
+```
+
+:::task
+Map the data using ggplot2.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.22-1 Choropleth map using ggplot2, acs/acs5/profile, 2020 
+
+dallas_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = dallas_tracts_sf,
+  aes_fill = "estimate",
+  subtitle = "Bachelor's degree or higher for tracts in Dallas Cty, TX",
+  scale_breaks = seq(0,100,10),
+  scale_colors = RColorBrewer::brewer.pal(n = 10, name = "Purples"),
+  hide_x_tics = T,
+  hide_y_tics = T,
+  legend_key_width = 0.75
+) +
+  labs(fill="Percentage")
+dallas_tracts_plot
+```
+
+:::task
+Map the data using tmap.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.23 Interactive map with tmap in view mode, acs/acs5/profile, 2020 
+tmap::tmap_mode("view")
+tmap::tm_shape(dallas_tracts_sf) +
+  tmap::tm_fill(
+    col = "estimate",
+    palette = "magma",
+    alpha = 0.5
+  )
+```
+
+
+:::task
+Map the data using leaflet.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.24 Interactive leaflet map, acs/acs5/profile, 2020
+
+pal <- leaflet::colorNumeric(
+  palette = "magma",
+  domain = dallas_tracts_sf$estimate
+)
+
+leaflet::leaflet() %>% 
+  #addProviderTiles(providers$Stamen.TonerLite) %>% 
+  addTiles() %>% 
+  addPolygons(
+    data = dallas_tracts_sf,
+    color = ~pal(estimate),
+    weight = 0.5,
+    smoothFactor = 0.2,
+    fillOpacity = 0.5,
+    label = ~estimate
+  ) %>% 
+addLegend(
+  position = "bottomright",
+  pal = pal,
+  values = dallas_tracts_sf$estimate,
+  title = "% with bachelor's<br/>degree"
+)
+```
+
+### 6.5.2 Alternative approaches to interactive mapping
+
+Get the median house values across the states (B25077_001, acs/acs1, 2019):
+
+```{r}
+housing_values_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2019,
+  vars = "B25077_001E", 
+  region = "state:*"
+) %>%  
+  data.table::setnames(old = "B25077_001E", new = "estimate") %>% 
+  .[, estimate := as.numeric(estimate)] 
+```
+
+Get the US geometries and join the above housing values:
+```{r}
+states_sf <- RcensusPkg::tiger_states_sf(
+  general = T,
+  resol = "20m",
+  datafile = housing_values_dt,
+  datafile_key = "GEOID",
+  output_dir = output_dir,
+  sf_info = F
+) 
+```
+
+:::task
+Use leaflet to map the median home values by state from the 1-year ACS.
+:::
+
+> Like most interactive mapping platforms, Leaflet uses *tiled mapping* in the Web Mercator coordinates reference system.  Web Mercator works well for tiled web maps that need to fit within rectangular computer screens, and preserves angles at large scales (zoomed in areas) which is useful for local navigation...it grossly distorts the area of geographic features near the poles, making it inappropriate for small-scale thematic mapping of the world or world regions.
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.25 Interactive leaflet map, acs/acs1, 2019
+
+us_pal <- leaflet::colorNumeric(
+  palette = "plasma",
+  domain = states_sf$estimate
+)
+
+leaflet::leaflet() %>% 
+  addProviderTiles(providers$Stamen.TonerLite) %>% 
+  addPolygons(
+    data = states_sf,
+    color = ~us_pal(estimate),
+    weight = 0.5,
+    smoothFactor = 0.2,
+    fillOpacity = 0.5,
+    label = ~estimate
+  ) %>% 
+  leaflet::addLegend(
+    position = "bottomright",
+    pal = us_pal,
+    values = states_sf$estimate,
+    title = "Median home values"
+  )
+```
+
+::: note
+Note that Alaska's area is grossly distorted relative to the rest of the United States. A solution is the **ggiraph** package which converts ggplot2 graphics into interactive plots.
+:::
+
+::: task
+Use the package *RcensusPkg::plot_us_data()* to map median house values across US state geometries.
+:::
+
+Define interval breaks/labels for variable "estimate" from `housing_values_dt`:
+
+```{r}
+intervals <- classInt::classIntervals(
+  housing_values_dt$estimate,
+  n = 6,
+  style = "pretty"
+)
+breaks <- intervals$brks
+labels <- c("$100,000","$200,000","$300,000","$400,000","$500,000","$600,000","$700,000")
+```
+
+```{r}
+# code-fold: true
+# fig-cap: |
+#   Figure 6.26a ggplot2 US map with RcensusPkg::plot_us_data(), acs/acs1, 2019
+
+data.table::setnames(housing_values_dt, old = "estimate", new = "Median House Values")
+
+RcensusPkg::plot_us_data(
+  df = housing_values_dt,
+  states_col = "NAME",
+  value_col = "Median House Values",
+  output_dir = output_dir,
+  scale_breaks = breaks,
+  scale_labels = labels,
+  scale_colors = RColorBrewer::brewer.pal(8,"YlOrRd")
+)
+```
+
+## 6.6 Advanced examples
+
+### 6.6.1 Mapping migration flows
+This section is currently skipped
+
+### 6.6.2 Linking maps and charts
+
+Link a choropleth map of household income for Vermont counties with a ggplot2 bar chart showing the income estimates along with intervals of error.
+
+Get the county household income estimates and margin of error for Vermont from the Census Bureau for 2020:
+
+```{r}
+vt_fips = usmap::fips(state = "vermont")
+vermont_hh_income_dt = RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = c("B19013_001E","B19013_001M"),
+  region = "county:*",
+  regionin = paste0("state:",vt_fips)
+) %>% 
+  data.table::setnames(old = c("B19013_001E","B19013_001M"), new = c("HouseholdIncome","MOE")) %>% 
+  .[,`:=`(NAME = stringr::str_remove(NAME, "County, Vermont"),      HouseholdIncome = as.numeric(HouseholdIncome), MOE = as.numeric(MOE))]
+```
+
+Get the simple features object(sf) for the Vermont county geographies and join it with the above county income data:
+
+```{r}
+express <- expression(STATEFP == "50")
+vermont_hh_income_geo_sf <- RcensusPkg::tiger_counties_sf(
+  output_dir = output_dir,
+  general = T,
+  sf_info = F,
+  express = express,
+  datafile = vermont_hh_income_dt,
+  datafile_key = "county"
+)
+```
+
+Create the ggplot2 geom_sf object from the above simple features using the ggiraph package:
+
+```{r}
+vermont_hh_income_map_plot <- ggplot2::ggplot(vermont_hh_income_geo_sf, aes(fill = HouseholdIncome)) +
+  ggiraph::geom_sf_interactive(aes(data_id = GEOID)) +
+  scale_fill_distiller(
+    palette = "Greens",
+    direction = 1,
+    guide = "none"
+  ) +
+  theme_void()
+
+ggiraph::girafe(ggobj = vermont_hh_income_map_plot, width_svg = 10, height_svg = 5) 
+```
+
+ Create the ggplot2 point chart with error bars from the above simple features:
+
+```{r}
+vermont_hh_income_point_plot <- ggplot2::ggplot(vermont_hh_income_geo_sf, aes(x = HouseholdIncome, y = reorder(NAME, HouseholdIncome),fill = HouseholdIncome)) +
+  geom_errorbar(aes(xmin = HouseholdIncome - MOE, xmax = HouseholdIncome + MOE)) +
+  ggiraph::geom_point_interactive(color = "black", size = 4, shape = 21, aes(data_id = GEOID)) +
+  scale_fill_distiller(palette = "Greens", direction = 1)
+
+ggiraph::girafe(ggobj = vermont_hh_income_point_plot, width_svg = 10, height_svg = 5) 
+```
+ 
+Join both plots:
+
+```{r}
+# returns an error
+# ggiraph::girafe(ggobj = vermont_hh_income_map_plot + vermont_hh_income_point_plot, width_svg = 10, height_svg = 5) 
+#  ggiraph::girafe_options(opts_hover(css = "fill:cyan;"))
+```
+
+### 6.6.3 Reactive mapping with Shiny
+
+See the file *using_shiny.R* in this directory for the application.
+
+### 6.6.4 Conclusion
+This concludes the notes on Chapter 6, part 2 "Mapping Census data with R".

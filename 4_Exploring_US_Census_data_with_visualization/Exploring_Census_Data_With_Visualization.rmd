@@ -1,0 +1,1029 @@
+---
+title: "Notes on 'Analyzing US Census Data"
+author: "Rick Dean"
+format: 
+  html:
+    minimal: true
+    toc: true
+    toc-depth: 4
+    toc-location: "right"
+    number-sections: true
+    number-offset: 3
+    self-contained: true
+    smooth-scroll: true
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    cap-location: "top"
+    mainfont: Verdana
+    page-layout: "full"
+    max-width: "1000px"
+    fig-width: 8
+    fig-height: 8
+    fig-asp: 1.0
+    fig-align: "center"
+    theme: journal
+    css: ../style.css
+    editor: visual
+    link-external-newwindow: true
+    callout-appearance: simple
+    callout-icon: false
+    callout-border-left: "#22CC00"
+    abstract-title: "Abstract"
+    abstract: "The following are notes and R script based on Chapter 4 of the book [Analyzing US Census Data: Methods, Maps, and Models in R](https://walker-data.com/census-r/index.html) by Kyle Walker with its presentation of examples and exercises. The R packages [RcensusPkg](https://github.com/deandevl/RcensusPkg) and [data.table](https://cran.r-project.org/web/packages/data.table/index.html) are used in accessing and manipulating the data respectively.  Graphics support is from the ggplot2 based [RplotterPkg](https://github.com/deandevl/RplotterPkg) and [plotly](https://plotly.com/ggplot2/getting-started/) The tables are created by using R package [DT](https://rstudio.github.io/DT/#)."
+---
+
+::: {.callout-tip collapse="true"}
+## Usage Notes
+
+-   To compile report inside RStudio:
+    -   open file `Exploring_Census_Data_With_Visualization.qmd`
+    -   press \`Render\` from a recent version of RStudio
+:::
+
+# Exploring US Census data with visualization
+
+::: task
+Load the required R packages.
+:::
+
+```{r loadPackages, message=FALSE, warning=FALSE}
+library(RcensusPkg, quietly = T)
+library(usmap, quietly = T)
+library(data.table, quietly = T)
+library(ggplot2, quietly = T)
+library(RplotterPkg, quietly = T)
+library(plotly, quietly = T)
+library(DT, quietly = T)
+library(magrittr, quietly = T)
+```
+
+## Basic Census visualization with ggplot2
+
+::: task
+Set up the census key in order to access the Census Bureau's api and define our table options.
+:::
+
+```{r}
+census_key <- Sys.getenv("CENSUS_KEY")
+options(DT.options = list(dom = 't'))
+```
+
+::: task
+From the 2016-2020 "acs/acs5" data set obtain the median household income and age data by county in the state of Georgia.
+:::
+
+1\. Call `RcensusPkg::get_vintage_data()`:
+
+Complete some minor data wrangling --
+
+-   Change the values in the "variable" column
+-   Convert "estimate" and "moe" columns to numeric
+-   Select variables
+-   Reshape the data frame from "long" to "wide"
+
+```{r}
+ga_fips <- usmap::fips("GA")
+ga_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = c("B19013_001E", "B01002_001E"), moe = c("B19013_001M", "B01002_001M")),
+  region = "county:*",
+  regionin = paste0("state:", ga_fips),
+)%>%
+  .[, variable := ifelse(variable == "B19013_001", "medinc", "medage")] %>%
+  .[, `:=` (estimate = as.numeric(estimate), moe = as.numeric(moe))] %>%
+  .[, .(NAME, variable, estimate)] %>%
+  dcast(NAME ~ variable, value.var = "estimate")
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  ga_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Median Age and Income for Georgia Counties from 2016-2020 5-year ACS Survey ("acs/acs5")'
+)
+```
+
+### Getting started with ggplot2
+
+::: task
+Graph the histogram of the variable "medinc".
+:::
+
+```{r}
+RplotterPkg::create_histogram_plot(
+  df = ga_dt,
+  aes_x = "medinc",
+  title = "Median Household Income",
+  subtitle = "Source: Census Bureau 2016-2020 ACS Among 159 Georgia Counties",
+  x_title = "Median Income ($)",
+  y_title = "Count",
+  rot_y_tic_label = TRUE,
+  bar_fill = "green",
+  bar_color = "green",
+  bar_alpha = 0.5,
+  bar_labels = TRUE,
+  bins = 15,
+  x_major_breaks = seq(20000, 120000, 20000),
+  x_scientific = FALSE
+)
+```
+
+::: task
+Graph the box-plot (box-and-whisker) of "medinc".
+:::
+
+```{r}
+RplotterPkg::create_box_plot(
+  df = ga_dt,
+  aes_y = "medinc",
+  title = "Median Household Income",
+  subtitle = "Source: Census Bureau 2016-2019 ACS Among 159 Georgia Counties",
+  y_title = "Median Income",
+  box_fill = "green",
+  box_color = "green",
+  box_alpha = 0.5,
+  rot_y_tic_label = TRUE,
+  y_scientific = FALSE
+)
+```
+
+### Visualizing multivariate relationships with scatter plots
+
+::: task
+From the above Georgia household data frame `ga_dt` produce a scatter plot of "medage" vs "medinc".
+:::
+
+```{r}
+RplotterPkg::create_scatter_plot(
+  df = ga_dt,
+  aes_x = "medage",
+  aes_y = "medinc",
+  title = "Median Household Age vs Income",
+  subtitle = "Source: Census Bureau 2016-2020 ACS Among 159 Georgia Counties",
+  x_title = "Median Age",
+  y_title = "Median Income",
+  rot_y_tic_label = TRUE,
+  pts_fill = "green",
+  pts_size = 1.5,
+  x_y_scientific = c(FALSE, FALSE)
+)
+```
+
+In measuring the relationship between age and income, the R language offers two simple functions. First, the `stats::lm()` function can be used to fit a linear model. Second, we can submit the resulting `stats::lm()` object to `stats:predict()` and return fitted values along with per point standard errors for computing upper/lower confidence bands for the fit.
+
+::: task
+Define a simple linear regression between variables "medage" and "medinc" from the `ga_dt` data frame using `stats::lm()`.
+:::
+
+1\.  Use `stats::lm()` to define the linear model:
+
+```{r}
+age_income_model <- stats::lm(medinc ~ medage, data = ga_dt)
+```
+
+2\.  Submit the model to `stats::predict()` and return the fitted values along with computing the upper/lower confidence values:
+
+```{r}
+a_predict <- stats::predict(object = age_income_model, se.fit = TRUE)
+ci_lower <- a_predict$fit - (2 * a_predict$se.fit)
+ci_upper <- a_predict$fit + (2 * a_predict$se.fit)
+```
+
+3\.  Append the fitted and confidence level values to `ga_dt`:
+
+```{r}
+ga_dt[, `:=`(fit = a_predict$fit, ci_lower = ci_lower, ci_upper = ci_upper)]
+```
+
+4\.  Plot the regression:
+
+```{r}
+#| column: page
+
+RplotterPkg::create_scatter_plot(
+  df = ga_dt,
+  aes_x = "medage",
+  aes_y = "medinc",
+  aes_CI_lwr = "ci_lower",
+  aes_CI_upr = "ci_upper",
+  title = "Median Household Age with Income Regression",
+  subtitle = "Source: Census Bureau 2016-2020 ACS Among Georgia Counties",
+  x_title = "Median Age",
+  y_title = "Median Income",
+  rot_y_tic_label = TRUE,
+  pts_fill = "green",
+  pts_size = 1.5,
+  x_y_scientific = c(FALSE, FALSE),
+  CI_show_ribbon = TRUE
+) + ggplot2::geom_line(aes(y = ga_dt$fit), color="blue", size=1.5)
+```
+
+## Customizing ggplot2 visualizations
+
+::: task
+Show the percent of commuters that take public transportation to work for the largest metropolitan areas in the United States for vintage 2019.
+:::
+
+1\.  Get the availability and description of variable ID "DP03_0021" in the "acs/acs1/profile" data set for vintage 2019:
+
+```{r}
+DP03_0021P_dt <- RcensusPkg::get_variables(
+  dataset = "acs/acs1/profile",
+  vintage = 2019,
+  brief = TRUE,
+  filter_str = "DP03_0021"
+)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  DP03_0021P_dt, 
+  colnames = c('ID' = 1),
+  caption = 'Variable ID "DP03_0021" from 1-year ACS Data Profile ("acs/acs1/profile")'
+)
+```
+
+::: task
+We have a percent estimate with ID of "DP03_0021PE" available. Get this percentage of workers commuting on public transportation for 2019.
+:::
+
+1\.  Use `RcensusPkg::get_vintage_data()`:
+
+Some simple data wrangling includes --
+
+-   Convert columns "estimate" and "moe" to numeric
+-   Order by descending "estimate" column
+-   Change a long column name to "metro area"
+
+```{r}
+commute_percent_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1/profile",
+  vintage = 2019,
+  vars = list(estimate = "DP03_0021PE", moe = "DP03_0021PM"),
+  region = "metropolitan statistical area/micropolitan statistical area"
+) %>%
+  .[, `:=`(estimate = as.numeric(estimate), moe = as.numeric(moe))] %>%
+  .[order(-estimate)] %>%
+  data.table::setnames("metropolitan statistical area/micropolitan statistical area", "metro area")
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  commute_percent_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Percent of Communters Using Public Transportation Across Metropolitan Areas'
+)
+```
+
+::: task
+Using variable ID "B01003_001E" get the total population in the metropolitan areas for vintage 2019.
+:::
+
+1\.  Use `RcensusPkg::get_vintage_data()`:
+
+Complete some minor wrangling on `pop_dt`:
+
+-   Select variables "NAME", "summary_est", "summary_moe"
+-   Make variables "summary_est" and "summary_moe" numeric
+-   Revalue "summary_moe" with -555555555 to `NA`
+
+```{r}
+pop_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2019,
+  vars = list(summary_est = "B01003_001E", summary_moe = "B01003_001M"),
+  region = "metropolitan statistical area/micropolitan statistical area") %>%
+.[, .(NAME, summary_est, summary_moe)] %>% 
+.[, `:=`(summary_est = as.numeric(summary_est), summary_moe = as.numeric(summary_moe))] %>% 
+.[, summary_moe := ifelse(summary_moe == -555555555, NA, summary_moe)]  
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  pop_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Total Population of Metropolitan Areas for 2019'
+)
+```
+
+::: task
+We have the data frames for the percent of commuters using public transportation (`commute_percent_dt`) and the total population (`pop_dt`) of metropolitan areas for 2019. Join these two data frames by the common "NAME" column so that we can perform statistical analysis.
+:::
+
+1\.  Join the commute and population dataframe by variable "NAME":
+
+```{r}
+# set keys
+data.table::setkey(commute_percent_dt, NAME)
+data.table::setkey(pop_dt, NAME)
+
+commute_pop_dt <- commute_percent_dt[pop_dt]
+```
+
+2\.  Do some minor wrangling on `commute_pop_dt`:
+
+-   Remove rows with "estimate" = `NA`
+-   Remove "summary_moe" column
+-   Modify long names
+-   Set "NAME" column as a factor
+-   Order by descending "summary_est" column
+-   Take the top 20 metro areas
+
+```{r}
+commute_pop_dt <- commute_pop_dt %>%
+  .[!is.na(estimate)] %>%  
+  .[, summary_moe := NULL] %>%  
+  .[, NAME := stringr::str_remove(NAME, "-.*$")] %>%   
+  .[, NAME := stringr::str_remove(NAME, ",.*$")] %>%
+  .[, NAME := as.factor(NAME)] %>%                     
+  .[order(-summary_est)] %>%                           
+  .[1:20]                                              
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  commute_pop_dt[1:10], 
+  colnames = c('ID' = 1),
+  caption = 'Top 20 Metropolitan Areas Percent Public Commute/Total Population for 2019'
+)
+```
+
+### Improving plot legibility
+
+::: task
+Show an improved bar chart of the `commute_pop_dt` data frame.
+:::
+
+```{r}
+#| column: page
+
+RplotterPkg::create_bar_plot(
+  df = commute_pop_dt,
+  aes_x = "NAME",
+  aes_y = "estimate",
+  title = "Percentage of Public Transit Commute",
+  subtitle = "2019 1-year ACS estimates",
+  do_coord_flip = TRUE,
+  rot_y_tic_label = TRUE,
+  order_bars = "asc",
+  bar_fill = "navy",
+  bar_color = "navy",
+  bar_alpha = 0.5,
+  bar_labels = TRUE,
+  bar_width = .85,
+  y_labels = c("0%", "10%", "20%", "30%"),
+  do_y_title = FALSE,
+  x_title = "ACS estimate",
+)
+```
+
+### Custom styling of ggplot2 charts
+
+### Exporting data visualizations from R
+
+::: task
+Export the above bar chart as a png image.
+:::
+
+```{r}
+a_plot <- RplotterPkg::create_bar_plot(
+  df = commute_pop_dt,
+  aes_x = "NAME",
+  aes_y = "estimate",
+  title = "Percentage of Public Transit Commute",
+  subtitle = "2019 1-year ACS estimates",
+  do_coord_flip = TRUE,
+  rot_y_tic_label = TRUE,
+  order_bars = "asc",
+  bar_fill = "navy",
+  bar_color = "navy",
+  bar_alpha = 0.5,
+  bar_labels = TRUE,
+  bar_width = .85,
+  y_labels = c("0%", "10%", "20%", "30%"),
+  y_title = "ACS Estimate",
+  do_y_title = FALSE,
+  png_file_path = "commute_percent_barchart.png",
+  png_width_height = c(850, 550)
+)
+```
+
+## Visualizing margins of error
+
+> ...it is also often useful to visualize those margins of error to illustrate the degree of uncertainty around estimates, especially when making comparisons between those estimates.
+
+### Data setup
+
+We will be looking at the median household income across counties in Maine from the "acs/acs5" with vintage 2020.
+
+::: task
+Start by getting the Maine county total population data (variable "B01003_001").
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()` for variable ID "B01003_001":
+
+Some simple data wrangling includes --
+
+-   Select columns "GEO_ID", "NAME", "variable", "value"
+-   Set "value" column as numeric
+-   Order rows by descending "value"
+-   Revalue "variable" column to value "totalpop"
+
+```{r}
+me_fips <- usmap::fips("ME")
+
+me_pop_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = "B01003_001E"),
+  region = "county:*",
+  regionin = paste0("state:", me_fips)) %>%
+    .[, .(GEO_ID, NAME, variable, estimate)] %>% # select variables
+    .[, estimate := as.numeric(estimate)] %>%   # set estimate as numeric
+    .[order(-estimate)] %>%                     # order by estimate
+    .[, variable := ifelse(is.na(variable), "totalpop", NA)] # revalue variable
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  me_pop_dt[1:10], 
+  colnames = c('ID' = 1),
+  caption = 'Total Populations Across Maine Counties from ACS 5-year Survey 2016-2020'
+)
+```
+
+::: task
+Get the Maine total household income across the counties for 2020.
+:::
+
+1\.  We want data for variable ID "B19013_001":
+
+Some simple data wrangling includes --
+
+-   Remove the string " County, Maine" from the "NAME" column
+-   Set columns "estimate" and "moe" as numeric
+-   Order rows by ascending "estimate" column values
+-   Set "NAME" column as a factor
+
+```{r}
+me_income_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = "B19013_001E", moe = "B19013_001M"),
+  region = "county:*",
+  regionin = paste0("state:", me_fips)) %>%
+  .[, NAME := stringr::str_remove(NAME, " County, Maine")] %>%           
+  .[, `:=`(estimate = as.numeric(estimate), moe = as.numeric(moe))] %>%  
+  .[order(estimate)] %>%                                                 
+  .[, NAME := factor(NAME, levels = NAME)]                               
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  me_income_dt[1:10], 
+  colnames = c('ID' = 1),
+  caption = 'Median Household Income Across Maine Counties from ACS 5-year Survey 2016-2020'
+)
+```
+
+::: task
+Create a dot plot of Maine's county household incomes.
+:::
+
+```{r}
+#| column: page
+
+RplotterPkg::create_scatter_plot(
+  df = me_income_dt,
+  aes_x = "estimate",
+  aes_y = "NAME",
+  title = "Median Household Income Estimates",
+  subtitle = "Counties in Maine from ACS 2016-2020 Survey",
+  pts_fill = "#12891b",
+  pts_size = 5.0,
+  x_title = "ACS estimate",
+  x_labels = scales::dollar,
+  do_y_title = FALSE,
+  rot_y_tic_label = TRUE
+)
+```
+
+### Using error bars for margins of error
+
+::: task
+Rank the margin of error values for the household incomes in `me_income_dt`.
+:::
+
+1\.  Reorder `me_income_dt` by descending "moe" values:
+
+```{r}
+moe_ranked_dt <- me_income_dt[order(-moe)] %>%
+  .[, .(GEO_ID, NAME, variable, estimate, moe)] %>%
+  .[, variable := ifelse(variable == "B19013_001", "hhincome", NA)] # revalue variable
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  moe_ranked_dt, 
+  colnames = c('ID' = 1),
+  caption = 'Household Income in Maine Counties Ranked by Margin of Error'
+)
+```
+
+::: task
+Repeat the above dot plot of household income with error bars around each point showing the degree of uncertainty based on the "moe" values.
+:::
+
+```{r}
+#| column: page
+
+RplotterPkg::create_scatter_plot(
+  df = me_income_dt,
+  aes_x = "estimate",
+  aes_y = "NAME",
+  title = "Median Household Income Estimates",
+  subtitle = "Counties in Maine from ACS 2016-2020 Survey",
+  pts_fill = "#12891b",
+  pts_size = 5.0,
+  x_title = "ACS estimate",
+  x_labels = scales::dollar,
+  do_y_title = FALSE,
+  rot_y_tic_label = TRUE
+) + geom_errorbarh(aes(xmin = estimate - moe, xmax = estimate + moe))
+```
+
+## Visualizing ACS estimates over time
+
+::: task
+As a time-series visualization example, obtain the median home value for Deschutes County, Oregon back to 2005.
+:::
+
+1\.  Get the data using `RcensusPkg::get_multi_vintage_data()`:
+
+Some simple data wrangling includes --
+
+-   Select columns "GEO_ID", "NAME", "variable", "estimate", "moe", "vintage"
+-   Set columns "estimate" and "moe" as numeric
+-   Create new columns of lower and upper confidence limits
+
+```{r}
+deschutes_fips <- usmap::fips("OR","Deschutes")
+
+deschutes_val_dt <- RcensusPkg::get_multi_vintage_data(
+  dataset = "acs/acs1",
+  vintage_v = 2005:2019,
+  vars = list(estimate = "B25077_001E", moe = "B25077_001M"),
+  region = paste0("county:", substr(deschutes_fips,3,5)),
+  regionin = paste0("state:", substr(deschutes_fips,1,2))) %>%
+  .[, .(GEO_ID, NAME, variable, estimate, moe, vintage)] %>%  
+  .[, `:=`(estimate = as.numeric(estimate), moe = as.numeric(moe))] %>% 
+  .[, `:=`(ci_lwr = estimate - moe, ci_upr = estimate + moe)]    
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  deschutes_val_dt, 
+  colnames = c('ID' = 1),
+  caption = 'Median Home Values in Deschutes County, Oregon from ACS 1-year Survey'
+)
+```
+
+3\.  Plot the data:
+
+```{r}
+#| column: page
+
+RplotterPkg::create_scatter_plot(
+  df = deschutes_val_dt,
+  aes_x = "vintage",
+  aes_y = "estimate",
+  aes_CI_lwr = "ci_lwr",
+  aes_CI_upr = "ci_upr",
+  title = "Median Home Values in Deschutes County, Oregon",
+  subtitle = "Source: Census Bureau - acs/acs1 2005-2019",
+  x_title = "Year",
+  y_title = "ACS estimate",
+  rot_y_tic_label = TRUE,
+  y_labels = scales::dollar,
+  connect = TRUE,
+  pts_size = 3.0,
+  pts_fill = "#b136b9",
+  x_major_breaks = 2005:2019,
+  x_minor_breaks = NULL,
+  CI_show_ribbon = TRUE,
+  CI_ribbon_color = "navy",
+  CI_show_line = FALSE
+)
+```
+## Exploring age and sex structure with population pyramids
+
+### Preparing data from the Population Estimates API
+
+The Population Estimates Program(PEP) offers a dataset named "pep/charagegroups" that has characteristic breakdowns for a number of variables.
+
+::: task
+Review the variables offered in "pep/charagegroups" for the vintage 2019.
+:::
+
+1\.  Call `RcensusPkg::get_variables()` for "pep/charagegroups":
+
+```{r}
+pep_char_vars_dt <- RcensusPkg::get_variables(
+  dataset = "pep/charagegroups",
+  vintage = 2019,
+  brief = TRUE
+)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  pep_char_vars_dt[4:18], 
+  colnames = c('ID' = 1),
+  caption = 'Available PEP Characteristic Variables for 2019'
+)
+```
+
+Both the "SEX" and "AGEGROUP" are categorical variables with integer values corresponding to string labels.
+
+::: task
+Define the integer values of "SEX" and "AGEGROUP" that we are interested in.
+:::
+
+```{r}
+sex_cat_dt <- RcensusPkg::get_category_strings(name = "sex", start_idx = 1, end_idx = 3)
+agegroup_cat_dt <- RcensusPkg::get_category_strings(name = "agegroup", start_idx = 1, end_idx = 19)
+```
+
+::: task
+Show the 19 "AGEGROUP" values and labels from "All ages" to "Age 85 years and older".
+:::
+
+```{r}
+ DT::datatable(
+  agegroup_cat_dt, 
+  colnames = c('ID' = 1),
+  caption = 'AGEGROUP Categories'
+)
+```
+
+::: task
+Show the "SEX" categories.
+:::
+
+```{r}
+DT::datatable(
+  sex_cat_dt, 
+  colnames = c('ID' = 1),
+  caption = 'SEX Categories'
+)
+```
+
+::: callout-tip
+## PEP related categorical variables
+
+The Census Bureau provides a key to the meaning of these and other PEP related categorical variables [here](https://www.census.gov/data/developers/data-sets/popest-popproj/popest/popest-vars.Vintage_2019.html).
+:::
+
+::: task
+Get the "SEX" and "AGEGROUP" variables from the "pep/charagegroups" dataset for the state of Utah, 2019.
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+Some simple data wrangling includes --
+
+-   Set columns "SEX" and "AGEGROUP" as numeric
+-   Revalue "SEX" column as SEX + 1
+-   Revalue "AGEGROUP" column as AGEGROUP + 1
+-   Omit "AGEGROUP" that have `NA` values
+
+```{r}
+ut_fips <- usmap::fips("UT")
+
+ut_dt <- RcensusPkg::get_vintage_data(
+  dataset = "pep/charagegroups",
+  vintage = 2019,
+  vars = c("SEX", "AGEGROUP", "POP"),
+  shape = "wide",
+  region = paste0("state:",ut_fips)) %>%
+  .[, `:=`(SEX = as.numeric(SEX), AGEGROUP = as.numeric(AGEGROUP))] %>% 
+  .[, SEX := sex_cat_dt$sex_label[SEX+1]] %>%  
+  .[, AGEGROUP := agegroup_cat_dt$agegroup_label[AGEGROUP+1]] 
+
+ut_dt <- na.omit(ut_dt, cols = "AGEGROUP")
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  ut_dt[1:10], 
+  colnames = c('ID' = 1),
+  caption = 'Utah SEX and AGEGROUP Counts from PEP for 2019'
+)
+```
+
+We have 3 categories of "SEX" and 19 categories of "AGEGROUP" for a total of 57 observations (3 x 19) in `ut_dt`.
+
+::: task
+Prepare data frame `ut_dt` for plotting the population pyramid by removing rows with "SEX" equal to "Both Sexes" and "AGEGROUP" equal to "All ages". Also set the "POP" values to negative for rows with "AGEGROUP" equal to "Male".
+:::
+
+Do some minor wrangling on `ut_dt`:
+
+-   Remove rows with SEX == "Both sexes"
+-   Remove rows with AGEGROUP == "All ages"
+-   Set POP as numeric
+-   Revalue POP based on SEX value
+-   Revalue AGEGROUP for ordering
+-   Make AGEGROUP a factor
+-   Order by (SEX, AGEGROUP)
+
+```{r}
+ut_pyramid_plot_dt <- ut_dt %>%
+  .[SEX != "Both Sexes"] %>% # remove rows with SEX == "Both sexes"
+  .[AGEGROUP != "All ages"] %>% # remove rows with AGEGROUP == "All ages"
+  .[, POP := as.numeric(POP)] %>% # set POP as numeric
+  .[, POP := ifelse(SEX == "Male", -POP, POP )] %>% # revalue POP based on SEX value
+  .[, AGEGROUP := ifelse(AGEGROUP == "Age 5 to 9 years", "Age 05 to 9 years", AGEGROUP)] %>% # for ordering
+  .[, AGEGROUP := as.factor(AGEGROUP)] %>% # make AGEGROUP a factor
+  .[order(SEX,AGEGROUP)]
+```
+
+### Designing and styling the population pyramid
+
+::: task
+Use `RplotterPkg::create_bar_plot()` to create the population pyramid from `ut_pyramid_plot_dt`.
+:::
+
+```{r}
+#| column: page
+
+pyramid_bar_plot <- RplotterPkg::create_bar_plot(
+  df = ut_pyramid_plot_dt,
+  aes_x = "AGEGROUP",
+  aes_y = "POP",
+  aes_fill = "SEX",
+  title = "Population Structure in Utah",
+  subtitle = "Source: Census Bureau pep/charagegroups 2019",
+  do_x_title = FALSE,
+  x_labels = function(x) stringr::str_remove_all(x, "Age\\s|\\syears"),
+  y_title = "Population Estimate",
+  y_labels = function(y) paste0(abs(y / 1000), "k"),
+  do_coord_flip = TRUE,
+  rot_y_tic_label = TRUE
+)
+pyramid_bar_plot
+```
+
+## Visualizing group-wise comparisons
+
+::: task
+Use multiple plots to compare groups of geographies. An example involves a comparison of median home values by Census tract for six counties in the Portland, Oregon area: Multnomah, which contains the city of Portland, and the suburban counties of Clackamas and Washington. Use the ACS 5-year survey 2020 data set.
+:::
+
+1\.  Get the fips numbers for six counties:
+
+```{r}
+or_fips <- usmap::fips(state = "OR")
+multnomah_fips <- substr(usmap::fips(state = "OR", county = "Multnomah"),3,5)
+clackamas_fips <- substr(usmap::fips(state = "OR", county = "Clackamas"),3,5)
+washington_fips <-substr(usmap::fips(state = "OR", county = "Washington"),3,5)
+yamhill_fips <- substr(usmap::fips(state = "OR", county = "Yamhill"),3,5)
+marion_fips <-substr(usmap::fips(state = "OR", county = "Marion"),3,5)
+columbia_fips <-substr(usmap::fips(state = "OR", county = "Columbia"),3,5)
+
+tract_fips <- c(multnomah_fips, clackamas_fips, washington_fips, yamhill_fips, marion_fips, columbia_fips)
+```
+
+2\.  Get all the tract data into one dataframe:
+
+```{r}
+home_vals_dt <- NULL
+for(a_fips in tract_fips){
+  tracts_vals_dt <- RcensusPkg::get_vintage_data(
+    dataset = "acs/acs5",
+    vintage = 2020,
+    vars = list(estimate = "B25077_001E", moe = "B25077_001M"),
+    region = "tract:*",
+    regionin = paste0("state:",or_fips,"+county:",a_fips)
+  )
+  home_vals_dt <- rbind(home_vals_dt, tracts_vals_dt)
+}
+```
+
+3\.  Do some minor wrangling:
+
+-   order by county, tract numbers
+-   split NAME string into tract,county,state
+-   Remove the redundant " County" value from "county" column
+-   select variables
+-   set "estimate" and "moe" as numeric
+-   filter rows for only positive values
+-   set "county" as a factor
+
+```{r}
+home_vals_dt <- home_vals_dt %>%
+  .[order(county,tract)] %>%  # order by county, tract numbers
+  .[, c("tract", "county", "state") := tstrsplit(NAME, ",", fixed = TRUE)] %>%   # split NAME string into tract,county,state
+  .[, county := stringr::str_remove(county, " County")] %>%
+  .[, .(state, county, tract, estimate, moe)] %>%  # select variables
+  .[, `:=`(estimate = as.numeric(estimate), moe = as.numeric(moe))] %>%  # set numerics
+  .[estimate > 0 & moe > 0] %>%  # filter rows for only positive values
+  .[, county := factor(county)] # county as a factor
+```
+
+4\.  Show the table:
+
+```{r}
+DT::datatable(
+  home_vals_dt[1:10], 
+  colnames = c('ID' = 1),
+  caption = 'Home Values for Portland Area Counties from ACS 5-year 2020'
+)
+```
+
+::: task
+Show summary statistics on the "estimate" variable of `home_vals_dt`.
+:::
+
+1\.  Compute min, max, mean, and median:
+
+```{r}
+county_summary_dt <- home_vals_dt[, .(min = min(estimate), max = max(estimate), mean = round(mean(estimate),1), median = stats::median(estimate)), by = county]
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  county_summary_dt, 
+  colnames = c('ID' = 1),
+  caption = 'Home Value Statistics for Portland Area Counties from ACS 5-year 2020'
+)
+```
+
+::: task
+Show the overall kernel density of the "estimate" variable of `home_vals_dt`.
+:::
+
+1\.  Call `RplotterPkg::create_density_plot()`:
+
+```{r}
+#| column: page
+
+RplotterPkg::create_density_plot(
+  df = home_vals_dt,
+  aes_x = "estimate",
+  title = "Home Values Density in the Portland Area",
+  subtitle = "Source: US Census Bureau American 5-Year Survey 2020",
+  x_title = "Home Value",
+  rot_y_tic_label = TRUE,
+  density_fill = "blue",
+  density_alpha = 0.5
+)
+```
+
+::: task
+Show the home value density by county.
+:::
+
+```{r}
+#| column: page
+
+RplotterPkg::create_density_plot(
+  df = home_vals_dt[, .(estimate), by = county],
+  aes_x = "estimate",
+  aes_fill = "county",
+  title = "Home Values Density in the Portland Area",
+  subtitle = "Source: US Census Bureau American Survey 2020",
+  x_title = "Home Value",
+  rot_y_tic_label = TRUE
+)
+```
+
+::: task
+Show the home value density by county in multiple charts.
+:::
+
+```{r}
+#| column: page
+
+counties <- levels(home_vals_dt$county)
+build_plot <- function(id, df, counties){
+  y_title <-  NULL
+  do_y_title <-  F
+  if(id == 1 | id == 4){
+    y_title <- "Density"
+    do_y_title <- T
+  }else{
+    do_y_title <- F
+  }
+  county <- counties[id]
+  plot_df <- df[county == counties[[id]], ]
+  aplot <- RplotterPkg::create_density_plot(
+    df = plot_df,
+    aes_x = "estimate",
+    title = county,
+    x_title = NULL,
+    x_labels = function(x) paste0("$", x / 1000, "k"),
+    x_limits = c(0, 1000000),
+    x_major_breaks = c(250000, 500000, 750000),
+    y_limits = c(0, 0.000008),
+    y_major_breaks = seq(0, 0.000008, 0.000001),
+    y_labels = NULL,
+    y_title = y_title,
+    do_y_title = do_y_title,
+    show_minor_grids = FALSE,
+    rot_y_tic_label = TRUE,
+    density_fill = "blue",
+    density_alpha = 0.5
+  )
+  return(aplot)
+}
+plot_lst <- purrr::map(1:6,
+  build_plot,
+  df = home_vals_dt,
+  counties = counties
+)
+names(plot_lst) <- counties
+layout <- list(
+  plots = plot_lst,
+  rows = c(1, 1, 1, 2, 2, 2),
+  cols = c(1, 2, 3, 1, 2, 3)
+)
+RplotterPkg::multi_panel_grid(
+ layout = layout,
+ col_widths = c(3, 3, 3),
+ row_heights = c(3.5, 3.5),
+ title = "Home Values Density by Tract in the Portland Area",
+ subtitle = "Source: US Census Bureau American Survey 2020"
+)
+
+```
+
+## Advanced visualization with ggplot2 extensions
+
+### Density ridges
+
+::: task
+Repeat the above home value density by county data (`home_vals_dt`) in a "ridge" type of display.
+:::
+
+1\.  Reshape `home_vals_dt` to a wide form using the "county" variable:
+
+```{r}
+home_vals_wide_dt <- data.table::dcast(home_vals_dt, tract ~ county, value.var = "estimate")
+```
+
+2\.  Call `RplotterPkg::create_density_ridge_plot()`:
+
+```{r}
+#| column: page
+
+RplotterPkg::create_density_ridge_plot(
+  df = home_vals_wide_dt,
+  title = "Home Values Density by Tract in the Portland Area",
+  variables = c(" Clackamas"," Columbia", " Marion", " Multnomah",  " Washington"," Yamhill"),
+  x_limits = c(0, 1000000),
+  x_major_breaks = c(250000, 500000, 750000),
+  density_fill = "blue",
+  density_alpha = 0.5
+)
+```
+
+### Interactive visualization with plotly
+
+::: task
+Take the ggplot2 object `pyramid_bar_plot` created above and make it interactive using the plotly package.
+:::
+
+```{r}
+ggplotly(pyramid_bar_plot)
+```
+::: callout-tip
+## Conclusion
+
+This concludes the notes on Chapter 4 "Exploring US Census data with visualization".
+:::

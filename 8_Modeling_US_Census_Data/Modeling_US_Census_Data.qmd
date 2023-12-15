@@ -1,0 +1,208 @@
+---
+title: "Notes on 'Analyzing US Census Data"
+author: "Rick Dean"
+format: 
+  html:
+    toc: false
+    toc-depth: 4
+    toc-location: "right"
+    number-sections: true
+    number-offset: 7
+    self-contained: true
+    smooth-scroll: true
+    code-fold: true
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    code-overflow: wrap
+    tbl-cap-location: "bottom"
+    fig-width: 12
+    fig-height: 6
+    fig-align: "center"
+    fig-cap-location: "bottom"
+    css: ../style.css
+    link-external-newwindow: true
+    abstract-title: "Abstract"
+    abstract: "The following are notes and R script based on Chapter 8 of the book [Analyzing US Census Data: Methods, Maps, and Models in R](https://walker-data.com/census-r/index.html) by Kyle Walker with its presentation of examples and exercises. The R packages [RcensusPkg](https://github.com/deandevl/RcensusPkg) and [data.table](https://cran.r-project.org/web/packages/data.table/index.html) are used in accessing and manipulating the data respectively.  Graphics support is from the ggplot2 based [RspatialPkg](https://github.com/deandevl/RspatialPkg). The tables are created by using the R package [RplotterPkg::create_table()](https://github.com/deandevl/RplotterPkg)."
+---
+
+# Modeling US Census data
+
+:::topic
+Load the Required R Packages:
+:::
+
+```{r}
+#| warning: false
+#| message: false
+
+library(data.table)
+library(sf)
+library(usmap)
+library(purrr)
+library(ggplot2)
+library(here)
+library(gt)
+library(stringr)
+library(magrittr)
+library(segregation)
+library(RplotterPkg)
+library(RspatialPkg)
+library(RcensusPkg)
+```
+
+Define the file path to the shapefiles folder at the root of this Rstudio project for holding downloaded shapefiles:
+```{r}
+output_dir <- file.path(here(), "shapefiles")
+```
+
+## Indices of segregation and diversity
+ 
+> Segregation as addressed here generally refers to the measurement of the extent to which two or more groups live apart from each other; diversity as a companion metric measures neighborhood heterogeneity among groups.
+
+### Data setup with spatial analysis
+
+:::task
+Get California population tract data by race/ethnicity
+:::
+
+Get the race/ethnicity data:
+```{r}
+ca_fips <- usmap::fips(state = "california")
+ca_race_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = c(
+    white = "B03002_003E",
+    black = "B03002_004E",
+    asian = "B03002_006E",
+    hispanic = "B03002_012E"
+  ),
+  regionin = paste0("state:",ca_fips),
+  region = "tract:*"
+)
+```
+
+Get the tract geometries for California and join it with the above race/ethnicity data:
+```{r}
+ca_race_tract_sf <- RcensusPkg::tiger_tracts_sf(
+  state = ca_fips,
+  output_dir = output_dir,
+  vintage = 2020,
+  general = T,
+  datafile = ca_race_dt,
+  datafile_key = "GEOID",
+  sf_info = F
+) %>% 
+  data.table::as.data.table(.) %>% 
+  data.table::setnames(
+    old = c("B03002_003E","B03002_004E","B03002_006E","B03002_012E"),
+    new = c("white","black","asian","hispanic")
+  ) %>% 
+  sf::st_as_sf(.)
+```
+
+Get the urbanized areas of California with populations greater than 750000:
+```{r}
+ca_urban_pop_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2019,
+  vars = "B01001_001E",
+  regionin = "urban_area"
+) %>% 
+ data.table::setnames(old = "B01001_001E",new = "population") %>% 
+ .[, population := as.numeric(population)] %>% 
+ .[population >= 750000 & grepl(pattern = "CA Urbanized Area (2010)", NAME, fixed = T),] %>%
+ .[, NAME := stringr::str_remove(NAME, stringr::fixed(" Urbanized Area (2010)"))]
+```
+
+Get the geometries for the urbanized areas and join it with the above urban population data:
+```{r}
+ca_urban_pop_sf <- RcensusPkg::tiger_urban_area_sf(
+  output_dir = output_dir,
+  vintage = 2019,
+  general = T,
+  sf_info = F,
+  datafile = ca_urban_pop_dt,
+  datafile_key = "GEOID",
+  sf_key = "GEOID10",
+  check_na = T
+) 
+```
+
+Compute an inner spatial join between the above California population race tracts (*ca_race_tract_sf*) geometries and the California urbanized area geometries (*ca_urban_pop_sf*):
+```{r}
+ca_urban_data_dt <- ca_race_tract_sf %>% 
+  sf::st_join(ca_urban_pop_sf, left = F) %>% 
+  sf::st_drop_geometry() %>% 
+  data.table::as.data.table(.) %>% 
+  data.table::setnames(old = c("GEOID.x","NAME10"),new = c("GEOID","urban_name")) %>% 
+  .[,.(white,black,asian,hispanic,GEOID,urban_name)] %>%   data.table::melt(id.vars = c("GEOID","urban_name"), variable.name = "variable",value.name = "estimate") %>% 
+.[, estimate := as.numeric(estimate)]
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 8.1: Prepared data for segregation analysis
+
+ca_urban_data_gt <- RplotterPkg::create_table(
+  x = ca_urban_data_dt[1:8]
+)
+ca_urban_data_gt
+```
+
+### The dissimilarity index
+
+> The dissimilarity index is widely used to assess neighborhood segregation between two groups within a region.
+
+:::task
+Assess neighborhood segregation between non-Hispanic white and Hispanic populations for the San Francisco/Oakland urbanized area.
+:::
+
+```{r}
+white_hispanic_dissimilar <- ca_urban_data_dt %>% 
+  .[variable %in% c("white","hispanic") & urban_name == "San Francisco--Oakland, CA",] %>% 
+  segregation::dissimilarity(
+    group = "variable",
+    unit = "GEOID",
+    weight = "estimate"
+  )
+```
+
+The D index of segregation between non-Hispanic and Hispanic populations in the San Francisco-Oakland area is `r white_hispanic_dissimilar`.
+
+
+:::task
+Find the dissimilarity index between non-Hispanic and Hispanic populations for all the urban areas.
+:::
+
+```{r}
+custom_fun <- function(dt){
+  dissimilar <- segregation::dissimilarity(
+    data = dt,
+    group = "variable",
+    unit = "GEOID",
+    weight = "estimate"
+  )
+}
+white_hispanic_dissimilar_urban_groups_dt <- ca_urban_data_dt %>%
+  .[variable %in% c("white","hispanic"),custom_fun(.SD),by=urban_name] %>% 
+  data.table::setorderv(.,cols = "est", order = -1)
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 8.2: Dissimilarity indices for Hispanic and non-Hispanic white populations, large California urbanized areas
+
+white_hispanic_dissimilar_urban_groups_gt <- RplotterPkg::create_table(
+  x = white_hispanic_dissimilar_urban_groups_dt
+)
+white_hispanic_dissimilar_urban_groups_gt
+```
+
+### Multi-group segregation indices
+
+
+
+

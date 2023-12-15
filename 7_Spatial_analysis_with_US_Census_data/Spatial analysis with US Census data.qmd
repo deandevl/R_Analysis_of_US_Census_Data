@@ -1,0 +1,1428 @@
+---
+title: "Notes on 'Analyzing US Census Data"
+author: "Rick Dean"
+format: 
+  html:
+    toc: false
+    toc-depth: 4
+    toc-location: "right"
+    number-sections: true
+    number-offset: 6
+    self-contained: true
+    smooth-scroll: true
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    code-overflow: wrap
+    tbl-cap-location: "bottom"
+    fig-width: 7
+    fig-asp: 0.6
+    fig-align: "center"
+    fig-cap-location: "bottom"
+    css: ../style.css
+    link-external-newwindow: true
+    abstract-title: "Abstract"
+    abstract: "The following are notes and R script based on Chapter 7 of the book [Analyzing US Census Data: Methods, Maps, and Models in R](https://walker-data.com/census-r/index.html) by Kyle Walker with its presentation of examples and exercises. The R packages [RcensusPkg](https://github.com/deandevl/RcensusPkg) and [data.table](https://cran.r-project.org/web/packages/data.table/index.html) are used in accessing and manipulating the data respectively.  Graphics support is from the ggplot2 based [RspatialPkg](https://github.com/deandevl/RspatialPkg). The tables are created by using the R package [RplotterPkg::create_table()](https://github.com/deandevl/RplotterPkg)."
+---
+
+# Spatial analysis with US Census data
+
+Load the Required R Packages:
+
+```{r}
+#| warning: false
+#| message: false
+
+library(data.table)
+library(sf)
+library(spdep)
+library(crsuggest)
+library(usmap)
+library(purrr)
+library(ggplot2)
+library(leaflet)
+library(mapview)
+library(RColorBrewer)
+library(here)
+library(gt)
+library(magrittr)
+library(RplotterPkg)
+library(RspatialPkg)
+library(RcensusPkg)
+```
+
+Define the file path to the shapefiles folder at the root of this Rstudio project for holding downloaded shapefiles:
+```{r}
+output_dir <- file.path(here(), "shapefiles")
+```
+
+## Spatial overlay
+
+> In this representation, different components of the landscape that interact in the real world are abstracted out into different layers, represented by different geometries. For example, Census tracts might be represented as polygons; customers as points; and roads as linestrings. 
+
+### Note: aligning coordinate reference systems
+
+> In any workflow using spatial overlay, including all of the methods discussed in this chapter, it is essential that all layers share the same CRS for overlay methods to work.
+
+### Identifying geometries within a metropolitan area
+
+> Given that Census spatial datasets are designed to align with one another, spatial overlay can be used to identify geographic features that fall within a given metropolitan area and extract those features.
+
+::: task
+Overlay the boundary geometries of the Kansas City metropolitan area with the state tract boundaries of Kansas and Missouri.
+:::
+
+Get the fips numbers for the states of Kansas and Missouri:
+```{r}
+ks_fips <- usmap::fips(state = "kansas")
+mo_fips <- usmap::fips(state = "missouri")
+```
+
+Get the combined tracts of both states:
+```{r}
+ks_mo_tracts_sf <- purrr::map_dfr(
+  c(ks_fips, mo_fips), 
+  ~{RcensusPkg::tiger_tracts_sf(
+      state = .x, 
+      general = TRUE, 
+      transform_crs = 8528, 
+      sf_info = FALSE,
+      output_dir = output_dir, 
+    )
+  }
+)
+```
+
+Get the metropolitan area (core-based statistical area) of Kansas City:
+```{r}
+kc_metro_sf <- RcensusPkg::tiger_cbsa_sf(
+  general = TRUE,
+  city_filter = "Kansas City",
+  transform_crs = 8528,
+  sf_info = FALSE,
+  output_dir = output_dir
+)
+```
+
+Map the overlay of metropolitan area geometries with the Kansas-Missouri tracts geometries:
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.2: The Kansas City CBSA relative to Kansas and Missouri tract boundaries
+
+RspatialPkg::get_geom_sf(
+  sf = ks_mo_tracts_sf,
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+RspatialPkg::get_geom_sf(
+  sf = kc_metro_sf,
+  sf_color = "red",
+  sf_alpha = 0.0,
+  sf_linewidth = 0.5,
+  adding = TRUE
+)
+```
+
+### Spatial subsets and spatial predicates
+
+::: task
+Subset and map `ks_mo_tracts_sf` tract geometries to just the CBSA Kansas City geometries `kc_metro_sf`.
+:::
+
+```{r}
+kc_tracts_sf <- ks_mo_tracts_sf[kc_metro_sf,]
+```
+
+Note that `[]` operator is using `sf::st_intersect()` to accomplish the intersection.
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.3: Census tracts that intersect the Kansas City CBSA
+
+RspatialPkg::get_geom_sf(
+  sf = kc_tracts_sf,
+  sf_fill = "white",
+  sf_color = "grey",
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+RspatialPkg::get_geom_sf(
+  sf = kc_metro_sf,
+  sf_color = "red",
+  sf_alpha = 0.0,
+  sf_linewidth = 0.5,
+  adding = TRUE
+)
+```
+
+::: task
+Use the spatial predicate `sf::st_within()` to return tracts only within the Kansas City CBSA geometries.
+:::
+
+```{r}
+kc_tracts_within_sf <- kc_tracts_sf[kc_metro_sf, op = sf::st_within]
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.4: Census tracts that are within the Kansas City CBSA
+
+RspatialPkg::get_geom_sf(
+  sf = kc_tracts_within_sf,
+  sf_fill = "white",
+  sf_color = "grey",
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+RspatialPkg::get_geom_sf(
+  sf = kc_metro_sf,
+  sf_color = "red",
+  sf_alpha = 0.0,
+  sf_linewidth = 0.5,
+  adding = TRUE
+)
+```
+
+## Spatial joins
+
+### Point-in-polygon spatial joins
+
+> Let’s consider a hypothetical task where a health data analyst in Gainesville, Florida needs to determine the percentage of residents age 65 and up who lack health insurance in patients’ neighborhoods. The analyst has a dataset of patients with patient ID along with longitude and latitude information.
+
+Create a hypothetical dataset:
+
+```{r}
+gainesville_patients_dt <- data.table(
+  patient_id = 1:10,
+  longitude = c(-82.308131, -82.311972, -82.361748, -82.374377, 
+                -82.38177, -82.259461, -82.367436, -82.404031, 
+                -82.43289, -82.461844),
+  latitude = c(29.645933, 29.655195, 29.621759, 29.653576, 
+               29.677201, 29.674923, 29.71099, 29.711587, 
+               29.648227, 29.624037)
+)
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.1: Hypothetical dataset of patients in Gainesville, Florida
+
+gainesville_patients_gt <- RplotterPkg::create_table(x = gainesville_patients_dt)
+gainesville_patients_gt
+```
+
+Prepare `gainesville_patients_dt` as a sf object.
+
+> By convention, the coordinate reference system used for longitude / latitude data is WGS 1984, represented with the EPSG code 4326. We’ll need to specify this CRS in st_as_sf() so that sf can locate the points correctly before we transform to an appropriate projected coordinate reference system with st_transform().
+
+```{r}
+gainesville_sf <- gainesville_patients_dt %>% 
+  sf::st_as_sf(coords = c("longitude","latitude"), crs = 4326)
+ # sf::st_transform(6440)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.5a: Mapview map of hypothetical patient locations in Gainsville, Florida
+
+mapview::mapview(
+  x = gainesville_sf,
+  col.regions = "red",
+  legend = F
+)
+```
+
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.5b: Leaflet map of hypothetical patient locations in Gainsville, Florida
+
+leaflet(gainesville_sf) %>%  
+  leaflet::addTiles() %>% 
+  addCircles(color = "red", radius = rep.int(210,nrow(gainesville_patients_dt)), label = ~lapply(patient_id, htmltools::htmlEscape))
+```
+
+Acquire health insurance percent ("DP03_0096PE","DP03_0096PM") coverage by tract from the American Community Survey ("acs/acs5/profile"). Gainsville is within Alachua County, Florida with data available from the 2015-2019 5-year ACS.
+```{r}
+fl_alachua_fips <- usmap::fips(state = "florida", county = "alachua")
+fl_fips <- substr(fl_alachua_fips,1,2)
+alachua_fips <- substr(fl_alachua_fips,3,5)
+alachua_insurance_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5/profile",
+  vintage = 2019,
+  vars = c("DP03_0096PE", "DP03_0096PM"),
+  region = "tract:*",
+  regionin = paste0("state:", fl_fips, "+county:", alachua_fips)
+) %>% 
+  data.table::setnames(., old = c("DP03_0096PE", "DP03_0096PM"),new = c("pct_insured","pct_insured_moe")) %>% 
+  .[, .(GEOID, pct_insured, pct_insured_moe)]
+```
+
+Join the insurance data with tract geometries.
+```{r}
+express <- expression(COUNTYFP == "001")
+alachua_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = fl_fips,
+  vintage = 2019,
+  general = TRUE,
+  express = express,
+  datafile = alachua_insurance_dt,
+  datafile_key = "GEOID",
+  sf_info = FALSE,
+  output_dir = output_dir
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, .(GEOID, pct_insured, pct_insured_moe, geometry)] %>% 
+  .[, `:=`(pct_insured = as.numeric(pct_insured), pct_insured_moe = as.numeric(pct_insured_moe))] %>% 
+  sf::st_as_sf() %>% 
+  sf::st_transform(4326)
+ # sf::st_transform(., 6440)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.6: Layered interactive view of patients and Census tracts in Gainsville
+
+labels <- sprintf(
+  "<strong>%s</strong>",
+  alachua_tracts_sf$pct_insured
+) %>% lapply(htmltools::HTML)
+
+#bins <- c(80, 83, 86, 89, 92, 95, 98, 94, 96, 98, 100)
+pal <- leaflet::colorBin("YlOrRd",domain = alachua_tracts_sf$pct_insured, bins = 7, na.color = "white", pretty = T)
+
+insured_chor_lf <- leaflet(alachua_tracts_sf) %>% 
+  leaflet::setView(-82.33935, 29.6449, 8) %>% 
+  leaflet::addTiles() %>% 
+  leaflet::addPolygons(
+    fillColor = ~pal(pct_insured),
+    weight = 2,
+    opacity = 1,
+    color = "white",
+    dashArray = "3",
+    fillOpacity = 0.5,
+    highlightOptions = highlightOptions(
+      weight = 5,
+      color = "#666",
+      dashArray = "",
+      fillOpacity = 0.7,
+      bringToFront = FALSE
+    ),
+    label = labels,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", "padding" = "3px 8px"),
+      textsize = "12px",
+      direction = "auto"
+    )
+  ) %>% 
+  leaflet::addLegend(
+    pal = pal,
+    values = ~pct_insured,
+    opacity = 0.7,
+    title = "% Health Insur",
+    position = "topright"
+  ) %>% 
+  leaflet::addCircles(
+    lng = gainesville_patients_dt$longitude,
+    lat = gainesville_patients_dt$latitude,
+    color = "red",
+    radius = rep.int(310,nrow(gainesville_patients_dt)),
+    label = ~lapply(gainesville_patients_dt$patient_id, htmltools::htmlEscape)
+  )
+insured_chor_lf
+```
+
+Alternate join using `sr::st_join()`:
+```{r}
+patients_joined_sf <- sf::st_join(
+  gainesville_sf,
+  alachua_tracts_sf
+)
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.2: Patients dataset after spatial join to Census tracts
+
+patients_joined_gt <- RplotterPkg::create_table(
+  x = as.data.frame(patients_joined_sf)
+)
+patients_joined_gt
+```
+
+### Spatial joins and group-wise spatial analysis
+#### Spatial join data setup
+
+> Let’s say that we are interested in analyzing the distributions of neighborhoods (defined here as Census tracts) by Hispanic population for the four largest metropolitan areas in Texas. We’ll use the variable B01003_001 from the 2019 1-year ACS to acquire population data by core-based statistical area (CBSA) along with simple feature geometry which will eventually be used for the spatial join.
+
+Get the Texas cbsa geometries:
+```{r}
+tx_cbsa_sf <- RcensusPkg::tiger_cbsa_sf(
+  vintage = 2019,
+  general = TRUE,
+  state_filter = "TX",
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+Get the "B01003_001" population data:
+```{r}
+tx_metro_pop_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2019,
+  vars = c("B01003_001E","B01003_001M")
+) %>% 
+  data.table::setnames(old = c("B01003_001E","B01003_001M"), new = c("estimate", "moe")) %>%
+  .[, `:=`(estimate = as.numeric(estimate), moe = as.numeric(moe))] %>% 
+  .[GEOID %in% tx_cbsa_sf$GEOID] %>% 
+  .[order(-estimate)] %>% 
+  .[1:4,]
+```
+
+Join the data `tx_metro_pop_dt` with the geometries `tx_cbsa_sf` based on "GEOID":
+```{r}
+tx_metro_pop_sf <- RcensusPkg::join_it(
+  df_1 = tx_cbsa_sf,
+  df_2 = tx_metro_pop_dt,
+  key_1 = "GEOID",
+  key_2 = "GEOID",
+) %>% 
+  .[, `:=`(variable = "B01003_001", moe = NA)] %>% 
+  .[, .(GEOID, NAME, variable, estimate, moe, geometry)] %>% 
+  .[order(-estimate)] %>% 
+  sf::st_as_sf()
+```
+
+Transform to an appropriate projected coordinate reference system for the state of Texas "NAD83(2011) / Texas Centric Albers Equal Area" (6579).
+```{r}
+tx_cbsa_crs_df <- crsuggest::suggest_crs(tx_cbsa_sf)
+
+tx_metro_pop_sf <- tx_metro_pop_sf |>
+  sf::st_transform(6579)
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.3: Large CBSA's in Texas
+
+tx_metro_pop_gt <- RplotterPkg::create_table(
+  x = as.data.frame(tx_metro_pop_sf) %>% 
+    .[c("GEOID", "NAME", "variable", "estimate", "moe")]
+)
+tx_metro_pop_gt
+```
+
+::: task
+Obtain data on percent of Hispanic by tract from the ACS Data Profile for 2015-2019.
+:::
+
+```{r}
+tx_fips <- usmap::fips(state = "texas")
+pct_hispanic_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5/profile",
+  vintage = 2019,
+  vars = c("DP05_0071PE","DP05_0071PM"),
+  region = "tract:*",
+  regionin = paste0("state:", tx_fips)
+)
+```
+
+:::task
+Obtain the geometries for tracts in the state of Texas and join the percent of Hispanic data.
+:::
+```{r}
+tx_tracts_hispanic_percent_sf <- RcensusPkg::tiger_tracts_sf(
+  state = tx_fips,
+  vintage = 2019,
+  general = TRUE,
+  datafile = pct_hispanic_dt,
+  datafile_key = "GEOID",
+  transform_crs = 6579,
+  sf_info = F,
+  output_dir = output_dir
+) %>% 
+  data.table::as.data.table(.) %>% 
+  data.table::setnames(.,old = c("DP05_0071PE","DP05_0071PM"), new = c("estimate","moe")) %>% 
+  .[, `:=`(estimate = as.numeric(estimate), moe = as.numeric(moe), variable = "DP05_0071PE")] %>% 
+  .[, .(GEOID, NAME, variable, estimate, moe, geometry)] %>% 
+  sf::st_as_sf()
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.4: Percent Hispanic by Census tract in Texas
+
+tx_tracts_hispanic_percent_gt <- RplotterPkg::create_table(
+  x = as.data.frame(tx_tracts_hispanic_percent_sf) %>% 
+    .[c("GEOID", "NAME", "variable", "estimate", "moe")] %>% 
+    .[1:6,]
+)
+tx_tracts_hispanic_percent_gt
+```
+
+#### Computing and visualizing the spatial join
+
+We have a total of 5254 tracts in the state of Texas with Hispanic percentage. To reduce the number of tracts, select only those tract geometries that are within the four metropolitan areas.
+```{r}
+metro_tracts_hispanic_percent_sf <- sf::st_join(tx_tracts_hispanic_percent_sf,tx_metro_pop_sf, join = st_within, suffix = c("_tracts", "_metro"), left = F)
+```
+
+We have reduced the number of tracts to 3189.
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.5: Table 7.5: Census tracts after spatial join operation 
+
+metro_tracts_hispanic_percent_gt <- RplotterPkg::create_table(
+  x = as.data.frame(metro_tracts_hispanic_percent_sf) %>% 
+    .[c("GEOID_tracts", "NAME_tracts", "variable_tracts", "estimate_tracts", "moe_tracts")] %>% 
+    .[1:6,]
+)
+metro_tracts_hispanic_percent_gt
+```
+
+
+:::task
+Plot the density distribution of hispanic percent across the 4 metro areas.
+:::
+```{r}
+#| code-fold: true
+#| fig-height: 8
+#| fig-cap: |
+#|   Figure 7.7: Faceted density plot of tract Hispanic populations by CBSA in Texas 
+
+metro_tracts_hispanic_percent_dt <- data.table::as.data.table(metro_tracts_hispanic_percent_sf) %>% 
+  .[estimate_tracts != -666666666, .(estimate_tracts, NAME_tracts, NAME_metro)] %>%   
+   RcensusPkg::long_to_wide(id_v = "NAME_tracts", parameter_col = "NAME_metro", value_col = "estimate_tracts") %>% 
+  data.table::setnames(old = names(.), new = c("tracts", "Austin", "Dallas", "Houston", "SanAntonio"))
+
+RplotterPkg::create_density_ridge_plot(
+  df = metro_tracts_hispanic_percent_dt,
+  variables = names(metro_tracts_hispanic_percent_dt)[2:5],
+  x_major_breaks = seq(0, 100, 25),
+  x_limits = c(0, 100),
+  x_title = "Percent Hispanic/Latino in Census tract",
+  y_major_breaks = seq(0.0, 0.03, 0.01),
+  y_limits = c(0.0, 0.03),
+  y_show_axis = TRUE,
+  plot_widths = 15,
+  plot_heights = 6.0,
+  density_color = "navy",
+  density_fill = "navy"
+)
+```
+
+> Output from a spatial join operation can also be “rolled up” to a larger geography through group-wise data analysis.
+
+:::task
+Group by the 4 Texas metro areas and find their respective hispanic percent median values.
+:::
+```{r}
+median_hispanic_pct_by_metro_sf <- data.table::as.data.table(metro_tracts_hispanic_percent_sf) %>% 
+  .[, .(median_est = median(.SD$estimate_tracts, na.rm = T), geometry = sf::st_union(geometry)), by = NAME_metro] %>% 
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.6: Summarized median Hispanic population by metro 
+
+median_hispanic_pct_by_metro_gt <- RplotterPkg::create_table(
+  x = data.table::as.data.table(median_hispanic_pct_by_metro_sf)[,1:2] 
+)
+median_hispanic_pct_by_metro_gt
+```
+:::task
+Map the grouped geometry of the "Austin-Round Rock-Georgetown, TX" metro area.
+:::
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.8: Dissolved geometry of Census tracts identified within the Austin CBSA
+
+austin_sf <- sf::st_as_sf(data.table::as.data.table(median_hispanic_pct_by_metro_sf)[3,])
+austin_plot <- RspatialPkg::get_geom_sf(
+  sf = austin_sf, 
+  sf_fill = "green",
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+austin_plot
+```
+
+> The returned geometry represents the extent of the given metropolitan area (in the above example, Austin-Round Rock). The analytic process we carried out not only summarized the data by group, it also summarized the geometry by group. The typical name for this geometric process in geographic information systems is a dissolve operation, where geometries are identified by group and combined to return a single larger geometry. 
+
+## Small area time-series analysis
+
+:::task
+Compare Census tract boundaries for a fast-growing area of Gilbert, Arizona (southeast of Phoenix) for 2015 and 2020.
+:::
+
+```{r}
+az_fips <- usmap::fips(state = "AZ")
+gilbert_2015_express <- expression(GEOID == "04013816000")
+gilbert_2015_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = az_fips,
+  vintage = 2015,
+  general = TRUE,
+  express = gilbert_2015_express,
+  sf_info = FALSE,
+  output_dir = output_dir
+)
+
+gilbert_2020_express <- expression(GEOID %in% c("04013816001","04013816002","04013816003","04013816005","04013816004"))
+gilbert_2020_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = az_fips,
+  vintage = 2020,
+  general = TRUE,
+  express = gilbert_2020_express,
+  sf_info = FALSE,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.9.1: Comparison of Census tracts in Gilbert, AZ from the 2010
+
+gilbert_2015_tracts_lf <- leaflet::leaflet(
+  data = gilbert_2015_tracts_sf
+) %>%
+  leaflet::addTiles() %>%
+  leaflet::addPolygons(
+    color = "blue",
+    fill = NA
+  )
+
+gilbert_2015_tracts_lf
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.9.2: Comparison of Census tracts in Gilbert, AZ from the 2020
+
+gilbert_2020_tracts_lf <- leaflet::leaflet(
+  data = gilbert_2020_tracts_sf
+) %>%
+  leaflet::addTiles() %>%
+  leaflet::addPolygons(
+    color = "blue",
+    fill = NA
+  )
+gilbert_2020_tracts_lf
+```
+
+```{r}
+# gilbert_2015_tracts_mv <- mapview::mapView(
+#   x = gilbert_2015_tracts_sf
+# )
+# gilbert_2015_tracts_mv
+```
+
+```{r}
+# gilbert_2020_tracts_mv <- mapview::mapView(
+#   x = gilbert_2020_tracts_sf
+# )
+# gilbert_2020_tracts_mv
+```
+
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.9.3: Comparison of Census tracts in Gilbert, AZ from the 2010 and 2020
+
+gilbert_2015_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = gilbert_2015_tracts_sf,
+  sf_color = "red",
+  sf_fill = NA,
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+
+gilbert_2020_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = gilbert_2020_tracts_sf,
+  sf_color = "red",
+  sf_fill = NA,
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+layout <- list(
+  plots = list(gilbert_2015_tracts_plot, gilbert_2020_tracts_plot),
+  rows = c(1, 1),
+  cols = c(1, 2)
+)
+
+RplotterPkg::multi_panel_grid(
+  layout = layout,
+  plot_titles = c("2015 tracts","2020 tracts")
+)
+```
+
+> Areal interpolation refers to the allocation of data from one set of zones to a second overlapping set of zones that may or may not perfectly align spatially. In cases of mis-alignment, some type of weighting scheme needs to be specified to determine how to allocate partial data in areas of overlap. Two such approaches for interpolation are outlined here: area-weighted interpolation and population-weighted interpolation.
+
+### Area-weighted areal interpolation
+
+> This method uses the area of overlap of geometries as the interpolation weights. From a technical standpoint, an intersection is computed between the origin geometries and the destination geometries. Weights are then computed as the proportion of the overall origin area comprised by the intersection.
+
+:::task
+Use area weights to estimate data at 2020 geographies for the Census tract in Gilbert.
+:::
+
+```{r}
+area_2015 <- gilbert_2015_tracts_sf$ALAND
+
+gilbert_2020_tracts_sf <- gilbert_2020_tracts_sf %>% 
+  data.table::as.data.table(.) %>% 
+  .[, proportion := round(ALAND/area_2015, digits = 3)] %>% 
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.10: Illustration of area weights 
+
+gilbert_2020_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = gilbert_2020_tracts_sf,
+  sf_color = "red",
+  sf_fill = NA,
+  subtitle = "2020 tracts",
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+  geom_sf_label(data = gilbert_2020_tracts_sf, aes(label = proportion), fun.geometry = st_centroid)
+gilbert_2020_tracts_plot
+```
+
+
+
+:::task
+Use `sf::st_interpolate_aw` interpolation method to compare data for Maricopa County, AZ on the number of people working from home in the 2011-2015 ACS (which uses 2010 boundaries) and the 2016-2020 ACS (which uses 2020 boundaries). 
+:::
+
+Get both the 2011-2015 and 2016-2020 acs/acs5 data for people working from home ("B08006_017") for Maricopa County, AZ.
+
+```{r}
+az_fips <- usmap::fips(state = "AZ")
+az_maricopa_fips <- usmap::fips(state = "AZ", county = "Maricopa")
+maricopa_fips <- substr(az_maricopa_fips,3,5)
+
+wfh_2015_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2015,
+  vars = "B08006_017E",
+  region = "tract:*",
+  regionin = paste0("state:", az_fips, "+county:", maricopa_fips)
+) %>% 
+  data.table::setnames(old = "B08006_017E", new = "worked_at_home") %>% 
+  .[, worked_at_home := as.numeric(worked_at_home)]
+
+wfh_2020_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = "B08006_017E",
+  region = "tract:*",
+  regionin = paste0("state:", az_fips, "+county:", maricopa_fips)
+) %>% 
+  data.table::setnames(old = "B08006_017E", new = "worked_at_home") %>% 
+  .[, worked_at_home := as.numeric(worked_at_home)]
+```
+
+:::task
+Get the tract geographies for the years and join with the above data.
+:::
+```{r}
+express <- expression(COUNTYFP == maricopa_fips)
+wfh_tracts_2015_sf <- RcensusPkg::tiger_tracts_sf(
+  state = az_fips,
+  vintage = 2015,
+  general = TRUE,
+  express = express,
+  datafile = wfh_2015_dt,
+  datafile_key = "GEOID",
+  transform_crs = 26949,
+  sf_info = FALSE,
+  output_dir = output_dir
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, .(worked_at_home, geometry)] %>% 
+  sf::st_as_sf(.)
+
+wfh_tracts_2020_sf <- RcensusPkg::tiger_tracts_sf(
+  state = az_fips,
+  vintage = 2020,
+  general = TRUE,
+  express = express,
+  datafile = wfh_2020_dt,
+  datafile_key = "GEOID",
+  transform_crs = 26949,
+  sf_info = FALSE,
+  output_dir = output_dir
+)%>% 
+  data.table::as.data.table(.) %>% 
+  .[, .(worked_at_home, geometry)] %>% 
+  sf::st_as_sf(.)
+```
+
+Use `sf::st_interpolate_aw` to estimate area-weighted interpolation.
+
+```{r}
+wfh_interpolate_aw_sf <- sf::st_interpolate_aw(
+  wfh_tracts_2015_sf,
+  wfh_tracts_2020_sf,
+  extensive = TRUE
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, GEOID := wfh_2020_dt$GEOID] %>% 
+  sf::st_as_sf(.)
+```
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Area interplolation using sf::st_interpolate_aw
+
+wfh_interpolate_aw_dt <- data.table::as.data.table(wfh_interpolate_aw_sf) %>% 
+  .[, .(GEOID, worked_at_home)] %>% 
+  .[1:6,]
+
+wfh_interpolate_aw_gt <- RplotterPkg::create_table(
+  x = wfh_interpolate_aw_dt
+)
+wfh_interpolate_aw_gt
+```
+
+
+
+### Population-weighted areal interpolation
+
+Note: this section has not been completed.
+
+<!-- :::task -->
+<!-- Use blocks in Maricopa County, AZ and their populations as weights to interpolate working from home totals. -->
+<!-- ::: -->
+
+<!-- Get the block data for Maricopa County, AZ -->
+<!-- ```{r} -->
+<!-- express <- expression(COUNTYFP20 == "013") -->
+<!-- az_blocks_2020_sf <- RcensusPkg::tiger_blocks_sf( -->
+<!--   state = az_fips, -->
+<!--   vintage = 2020, -->
+<!--   express = express, -->
+<!--   output_dir = output_dir, -->
+<!--   sf_info = F -->
+<!-- ) -->
+<!-- ``` -->
+
+### Making small-area comparisons
+
+Note: this section has not been completed.
+
+
+## Distance and proximity analysis
+
+:::task
+Consider accessibility to Level I and Level II trauma hospitals by Census tract in the state of Iowa.
+:::
+
+Get the Census tracts and hospital locations.
+```{r}
+ia_fips <- usmap::fips(state = "Iowa")
+ia_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = ia_fips,
+  vintage = 2019,
+  transform_crs = 26975,
+  output_dir = output_dir,
+  sf_info = F
+)
+
+hospital_url <- "https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/Hospital/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson"
+
+trauma_sf <- sf::st_read(hospital_url, quiet = T) %>%
+  st_transform(26975) %>% 
+  data.table::as.data.table(.) %>% 
+  .[TRAUMA == "LEVEL I" | TRAUMA == "LEVEL II",] %>% 
+  sf::st_as_sf(.)
+```
+
+### Calculating distances
+
+> To determine accessibility of Iowa Census tracts to Level I or II trauma centers, we need to identify not only those hospitals that are located in Iowa, but also those in other states near to the Iowa border, such as in Omaha, Nebraska and Rock Island, Illinois. 
+
+```{r}
+ia_trauma_sf <- trauma_sf %>% 
+  sf::st_filter(
+    ia_tracts_sf, 
+    .predicate = st_is_within_distance,
+    dist = 100000
+  )
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.14: Level I or II trauma centers within 100km of Iowa 
+
+ia_trauma_plot <- RspatialPkg::get_geom_sf(
+  sf = ia_tracts_sf,
+  sf_color = NA,
+  sf_fill = "grey50"
+) +
+  RspatialPkg::get_geom_sf(
+    sf = ia_trauma_sf,
+    sf_color = "red",
+    sf_fill = "red",
+    sf_size = 2,
+    adding = T
+  )
+ia_trauma_plot
+```
+
+:::task
+Calculate the distances from the centroids of Iowa Census tracts (reflecting the center points of each tract geometry) to each trauma center.
+:::
+```{r}
+dist_mt <- ia_tracts_sf %>%
+  sf::st_centroid() %>%
+  sf::st_distance(ia_trauma_sf) 
+
+min_dist_v <- dist_mt %>%
+  apply(1, min) %>%
+  as.vector() %>%
+  magrittr::divide_by(1000) 
+  
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.15: Histogram of minimum distances to trauma centers 
+
+min_disp_plot <- RplotterPkg::create_histogram_plot(
+  df = data.frame(min_distance = min_dist_v),
+  aes_x = "min_distance",
+  bin_breaks = seq(0, 140, 10),
+  x_limits = c(0, 140),
+  x_major_breaks = seq(0, 140, 20),
+  bar_fill = 'green'
+)
+min_disp_plot
+```
+
+### Calculating travel times
+
+Note: this section has not been completed.
+
+### Catchment areas with buffers and isochrones
+
+> ...you’ll want to analyze accessibility in a more local way. A common use case might involve a study of the demographic characteristics of a hospital catchment area, defined as the area around a hospital from which patients will likely come.
+
+:::task
+Use Iowa Methodist Medical Center in Des Moines as an example and the distance-based approach using a buffer, implemented with the sf::st_buffer().
+:::
+
+Compute the 5k buffer around the Iowa Methodist Medical Center.
+```{r}
+iowa_methodist_sf <- data.table::as.data.table(ia_trauma_sf) %>% 
+  .[ID == "0009850308",] %>% 
+  sf::st_as_sf(.)
+
+iowa_methodist_buf5km_sf <- sf::st_buffer(iowa_methodist_sf, dist = 5000) 
+```
+
+Plot the buffer with leaflet.
+```{r}
+hospital_icon <- leaflet::makeAwesomeIcon(icon = "ios-medical", 
+                                 markerColor = "red",
+                                 library = "ion")
+
+# The Leaflet package requires data be in CRS 4326
+iowa_methodist_buf5km_lf <- leaflet() %>% 
+  addTiles() %>%
+  addPolygons(data = sf::st_transform(iowa_methodist_buf5km_sf, 4326)) %>% 
+  addAwesomeMarkers(data = st_transform(iowa_methodist_sf, 4326),
+                    icon = hospital_icon)
+iowa_methodist_buf5km_lf
+```
+
+### Computing demographic estimates for zones with areal interpolation
+
+Note: this section has not been completed.
+
+## Better cartography with spatial overlay
+
+:::task
+Map the median household income by Census tract in Manhattan (New York County), NY
+:::
+
+Get the median household income data.
+```{r}
+ny_state_county_fips <- usmap::fips(state = "New York", county = "New York")
+ny_state_fips <- substr(ny_state_county_fips, 1,2)
+ny_county_fips <- substr(ny_state_county_fips, 3, 5)
+
+ny_income_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = "B19013_001E",
+  region = "tract:*",
+  regionin = paste0("state:", ny_state_fips, "+county:", ny_county_fips)
+) %>% 
+  data.table::setnames(old = "B19013_001E", new = "median_income") %>% 
+  .[, median_income := as.numeric(median_income)] %>% 
+  .[median_income > 0.0]
+```
+
+Get the New York county tract shapefiles and join with the above income data.
+```{r}
+express <- expression(COUNTYFP == ny_county_fips)
+ny_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = ny_state_fips,
+  vintage = 2020,
+  general = TRUE,
+  express = express,
+  datafile = ny_income_dt,
+  datafile_key = "GEOID",
+  sf_info = FALSE,
+  output_dir = output_dir
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, .(median_income, geometry)] %>% 
+  sf::st_as_sf(.)
+```
+
+Map the tract shapefiles and data.
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.18: Map of Manhattan with default CB geometries 
+
+ny_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = ny_tracts_sf,
+  aes_fill = "median_income",
+  own_scale = T,
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+   ggplot2::scale_fill_viridis_c(labels = scales::label_dollar())
+ny_tracts_plot
+```
+
+> As illustrated in the graphic, the boundaries of Manhattan include water boundaries - stretching into the Hudson and East Rivers. In turn, a more accurate representation of Manhattan’s land area might be desired. 
+
+###  “Erasing” areas from Census polygons
+
+:::task
+Remove water area from the Census tracts of New York county.
+:::
+
+Re-define the New York tracts.
+```{r}
+express <- expression(COUNTYFP == ny_county_fips)
+ny_tracts_2_sf <- RcensusPkg::tiger_tracts_sf(
+  state = ny_state_fips,
+  vintage = 2020,
+  general = FALSE,
+  transform_crs = 6538,
+  express = express,
+  datafile = ny_income_dt,
+  datafile_key = "GEOID",
+  sf_info = FALSE,
+  output_dir = output_dir
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, .(median_income, geometry)] %>% 
+  sf::st_as_sf(.)
+```
+
+Use `RcensusPkg::remove_area_water()` to remove area water from the New York tracts.
+```{r}
+ny_tracts_without_water_sf <- RcensusPkg::remove_area_water(ny_tracts_2_sf, output_dir = output_dir)
+```
+
+Map the New York tracts both with and without water.
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.19: Map of Manhattan with water areas erased 
+
+ny_tracts_with_water_plot <- RspatialPkg::get_geom_sf(
+  sf = ny_tracts_2_sf,
+  sf_fill = "green",
+  sf_alpha = 0.5,
+  hide_x_tics = T,
+  hide_y_tics = T,
+  show_legend = F
+)
+ny_tracts_without_water_plot <- RspatialPkg::get_geom_sf(
+  sf = ny_tracts_without_water_sf,
+  sf_fill = "green",
+  sf_alpha = 0.5,
+  hide_x_tics = T,
+  hide_y_tics = T,
+  show_legend = F
+)
+
+layout <- list(
+  plots = list(ny_tracts_with_water_plot, ny_tracts_without_water_plot),
+  rows = c(1, 1),
+  cols = c(1, 2)
+)
+
+ny_tracts_multi_plot <- RplotterPkg::multi_panel_grid(
+  layout = layout,
+  plot_titles = c("with water", "without water")
+)
+```
+
+## Spatial neighborhoods and spatial weights matrices
+
+Acquire a dataset on median age by Census tract in the Dallas-Fort Worth, TX metropolitan area.
+
+Get the median age for Census tracts in Texas.
+```{r}
+tx_fips <- usmap::fips(state = "TX")
+
+tx_tracts_median_age_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = "B01002_001E",
+  region = "tract:*",
+  regionin = paste0("state:", tx_fips)
+) %>% 
+  data.table::setnames(old = "B01002_001E", new = "median_age") %>% 
+  .[, .(NAME, tract, median_age = as.numeric(median_age), GEOID)] %>% 
+  .[median_age > 0,]
+```
+
+Get the geometries for the Dallas area CBSA.
+```{r}
+dallas_cbsa_sf <- RcensusPkg::tiger_cbsa_sf(
+  vintage = 2020,
+  state_filter = "TX",
+  city_filter = "Dallas-Fort Worth-Arlington",
+  general = T,
+  transform_crs = 32138,
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+Get the Texas Census tracts and age data for just within the Dallas CBSA geometries.
+```{r}
+dallas_tracts_median_age_sf <- RcensusPkg::tiger_tracts_sf(
+  state = tx_fips,
+  vintage = 2020,
+  general = T,
+  transform_crs = 32138,
+  datafile = tx_tracts_median_age_dt,
+  datafile_key = "GEOID",
+  output_dir = output_dir,
+  check_na = T,
+  sf_info = F
+) %>% 
+sf::st_filter(dallas_cbsa_sf, .predicate = st_within)
+```
+
+Plot the Dallas area tracts with their color coded median age.
+```{r}
+dallas_tracts_median_age_plot <- RspatialPkg::get_geom_sf(
+  sf = dallas_tracts_median_age_sf,
+  aes_fill = "median_age",
+  own_scale = T,
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+  scale_fill_viridis_c(na.value = "white")
+dallas_tracts_median_age_plot
+```
+
+### Understanding spatial neighborhoods
+
+:::task
+Using `spdep::poly2nb()` find polygons in the above Dallas median age shapefile that share at least one vertex are considered neighbors.
+:::
+```{r}
+neighbors_lst <- spdep::poly2nb(
+  pl = dallas_tracts_median_age_sf, 
+  queen = TRUE
+)
+
+summary(neighbors_lst)
+```
+
+:::task
+Show the neighbors of the Census tract at row index 1:
+:::
+```{r}
+neighbors_lst[[1]]
+```
+
+### Generating the spatial weights matrix
+
+> To perform exploratory spatial data analysis, we can convert the neighbors list object into spatial weights. Spatial weights define how metrics associated with a feature’s neighbors should be weighted. 
+
+:::task
+Convert the above neighbors list to a weights matrix.
+:::
+```{r}
+weights_lst <- spdep::nb2listw(
+  neighbours = neighbors_lst, 
+  style = "W"
+)
+weights_lst$weights[[1]]
+```
+> Given that the Census tract at row index 1 has five neighbors, each neighbor is assigned the weight 0.2.
+
+## Global and local spatial autocorrelation
+
+> With respect to the exploratory spatial analysis of Census data, we might be interested in the degree to which a given Census variable clusters spatially, and subsequently where those clusters are found.
+
+### Spatial lags and Moran’s I
+
+:::task
+Compute the average median age for the neighbors of each Census tract in the Dallas-Fort Worth metropolitan area.
+:::
+```{r}
+lag_v <- spdep::lag.listw(
+  x = weights_lst,
+  var = dallas_tracts_median_age_sf$median_age
+)
+```
+:::task
+Draw a scatterplot of the ACS estimate vs. its lagged mean to do a preliminary assessment of spatial clustering in the data.
+:::
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.21: Scatterplot of median age relative to its spatial lag 
+
+dt <- data.table::as.data.table(dallas_tracts_median_age_sf) %>% 
+  .[, lag_median_age := lag_v]
+
+cluster_plot <- RplotterPkg::create_scatter_plot(
+  df = dt,
+  aes_x = "median_age",
+  aes_y = "lag_median_age"
+) +
+  geom_abline(color = "red")
+cluster_plot
+```
+
+:::task
+Compute Moran's I, which is similar to a correlation coefficient but for the relationship between observations and their neighbors.
+:::
+```{r}
+spdep::moran.test(
+  x = dallas_tracts_median_age_sf$median_age, 
+  listw = weights_lst
+)
+```
+
+The statistic is positive and the small p-value suggests that we reject the null hypothesis of spatial randomness in the dataset.
+
+### Local spatial autocorrelation
+
+> Local measures of spatial autocorrelation disaggregate global results to identify “hot spots” of similar values within a given spatial dataset. 
+
+> The equation (Gi*) computes a ratio of the weighted average of the neighborhood values to the total sum of values for the dataset. Results are returned as z-scores.
+
+```{r}
+localg_weights_lst <- spdep::nb2listw(
+  spdep::include.self(neighbors_lst)
+)
+
+localG_v <- spdep::localG(
+  x = dallas_tracts_median_age_sf$median_age, 
+  listw = localg_weights_lst
+)
+
+```
+
+:::task
+Create a cholorplath map of the Dallas tracts based on their respective weighted neighbor tracts average of median age.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.22: Map of local Gi* scores 
+
+dallas_tracts_localG_sf <- data.table::as.data.table(dallas_tracts_median_age_sf) %>%
+  .[, localG := as.numeric(localG_v)] %>% 
+  sf::st_as_sf(.)
+
+RspatialPkg::get_geom_sf(
+  sf = dallas_tracts_localG_sf,
+  aes_fill = "localG",
+  own_scale = T,
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+  scale_fill_distiller(palette = "RdYlBu")
+```
+
+:::task
+Use the Gi* z-scores form *dallas_tracts_localG_sf* define values greater than 2.5 as a "High cluster" and below -2.5 as "Low cluster" and map these areas.
+:::
+
+```{r}
+dallas_tracts_localG_sf <- data.table::as.data.table(dallas_tracts_localG_sf) %>% 
+  .[, hotspot := fcase(
+    localG >= 2.576, "High cluster",
+    localG <= -2.576, "Low cluster",
+    default = "Not significant"
+  )
+  ] %>% 
+  .[, hotspot := as.factor(hotspot)] %>% 
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.23: Map of local Gi* scores with significant clusters highlighted
+colors <- c("red","blue","grey")
+names(colors) <- c("High cluster", "Low cluster", "Not significant")
+RspatialPkg::get_geom_sf(
+  sf = dallas_tracts_localG_sf,
+  aes_fill = "hotspot",
+  sf_color = "white",
+  scale_values = colors,
+  scale_labels = names(colors),
+  hide_x_tics = T,
+  hide_y_tics = T
+) 
+```
+
+> The red areas on the resulting map are representative of "high" clustering of median age, where neighborhoods with older populations are surrounded by other older-age neighbors. "Low" clusters are represented in blue, which reflect clustering of Census tracts with comparatively youthful populations.
+
+### Identifying clusters and spatial outliers with local indicators of spatial association (LISA)
+
+> One of the major benefits of using LISA for exploratory analysis is its ability to identify both spatial clusters, where observations are surrounded by similar values, and spatial outliers, where observations are surrounded by dissimilar values.
+
+:::task
+Compute the LISA values for median age among the Dallas tracts.
+:::
+
+Set a random number seed and convert the median age to a z-score using *scale()*:
+```{r}
+dallas_tracts_median_age_sf <- data.table::as.data.table(dallas_tracts_median_age_sf) %>% 
+  .[, scaled_median_age := as.numeric(scale(median_age))] %>% 
+  sf::st_as_sf(.)
+```
+
+Compute LISA with *localmoran_perm()* for the scaled value of median age:
+```{r}
+dallas_tracts_median_age_LISA_dt <- spdep::localmoran_perm(
+  x = dallas_tracts_median_age_sf$scaled_median_age,
+  listw = weights_lst,
+  nsim = 999L,
+  alternative = "two.sided"
+) %>% data.table::as.data.table(.) %>% 
+  data.table::setnames(old = colnames(.), new = c("local_i","exp_i","var_i","z_i","p_i","p_i_sim","pi_sim_folded","skewness","kurtosis"))
+```
+
+Compute the lagged value of scaled_median_age using *spdep::lag.listw()*:
+```{r}
+lag_scaled_median_age_v <- spdep::lag.listw(
+  x = weights_lst,
+  var = dallas_tracts_median_age_sf$scaled_median_age
+)
+```
+
+Combine vectors/columns:
+```{r}
+dallas_tracts_median_age_LISA_dt <- dallas_tracts_median_age_LISA_dt %>% 
+  .[, `:=`(GEOID = dallas_tracts_median_age_sf$GEOID, scaled_median_age = dallas_tracts_median_age_sf$scaled_median_age, lagged_median_age = lag_scaled_median_age_v)]
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 7.8: Local Moran's I results
+
+dallas_tracts_median_age_LISA_gt <- RplotterPkg::create_table(x = dallas_tracts_median_age_LISA_dt[1:6,.(GEOID,scaled_median_age,lagged_median_age)])
+dallas_tracts_median_age_LISA_gt
+```
+
+:::task
+From *dallas_tracts_median_age_LISA_dt* complete a LISA quadrant scatterplot.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.24: LISA quadrant scatterplot
+
+dallas_tracts_median_age_LISA_dt[, lisa_cluster := fcase(
+  p_i >= 0.05, "Not significant",
+  scaled_median_age > 0 & local_i > 0, "High-high",
+  scaled_median_age > 0 & local_i < 0, "High-low",
+  scaled_median_age < 0 & local_i > 0, "Low-low",
+  scaled_median_age < 0 & local_i < 0, "Low-high"
+)]
+
+color_values <- c(`High-high` = "red",
+                  `High-low` = "pink",
+                  `Low-low` = "blue",
+                  `Low-high` = "lightblue",
+                  `Not significant` = "white"
+                )
+
+RplotterPkg::create_scatter_plot(
+  df = dallas_tracts_median_age_LISA_dt,
+  aes_x = "scaled_median_age",
+  aes_y = "lagged_median_age",
+  aes_fill = "lisa_cluster",
+  x_title = "Median age (z-score)",
+  y_title = "Spatial lag of median age (z-score)",
+  pts_size = 2
+) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_manual(values = color_values)
+
+```
+
+> Observations falling in the top-right quadant represent "high-high" clusters, where Census tracts with higher than median age are also surrounded by Census tracts with older populations. The bottom-left quadrant also represents spatial clusters, but instead includes lower median age tracts that are surrounded by tracts with similarly low median ages. The top-left and bottom-right quadrants are home to spatial outliers, where values are dissimilar from their neighbors.
+
+:::task
+Map the cluster areas.
+:::
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 7.25: LISA cluster map
+
+
+dallas_tracts_median_age_sf <- data.table::as.data.table(dallas_tracts_median_age_sf) %>% 
+  .[, lisa_cluster := dallas_tracts_median_age_LISA_dt$lisa_cluster] %>% 
+  sf::st_as_sf(.)
+
+RspatialPkg::get_geom_sf(
+  sf = dallas_tracts_median_age_sf,
+  aes_fill = "lisa_cluster",
+  own_scale = T,
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+  scale_fill_manual(values = color_values)
+```
+
+### Conclusion
+This concludes the notes on Chapter 7 "Spatial Analysis with US Census Data"

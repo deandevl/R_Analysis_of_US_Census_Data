@@ -1,0 +1,542 @@
+---
+title: "Notes on 'Analyzing US Census Data"
+author: "Rick Dean"
+format: 
+  html:
+    toc: false
+    toc-depth: 4
+    toc-location: "right"
+    number-sections: true
+    number-offset: 5
+    self-contained: true
+    smooth-scroll: true
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    code-overflow: wrap
+    tbl-cap-location: "bottom"
+    fig-width: 7
+    fig-asp: 0.6
+    fig-align: "center"
+    fig-cap-location: "bottom"
+    css: ../style.css
+    link-external-newwindow: true
+    callout-appearance: simple
+    callout-icon: false
+    callout-border-left: "#22CC00"
+    abstract-title: "Abstract"
+    abstract: "The following are notes and R script based on Chapter 6 of the book [Analyzing US Census Data: Methods, Maps, and Models in R](https://walker-data.com/census-r/index.html) by Kyle Walker with its presentation of examples and exercises. This is part 1 of Chapter 6 and ends with section 6.4, 'Cartographic workflows with non-Census data'. The R packages [RcensusPkg](https://github.com/deandevl/RcensusPkg) and [data.table](https://cran.r-project.org/web/packages/data.table/index.html) are used in accessing and manipulating the data respectively. The tables are created by using the R package [RplotterPkg::create_table()](https://github.com/deandevl/RplotterPkg). The mapping of the geographic datasets (shapefiles) was accomplished using [RspatialPkg::get_geom_sf()](https://github.com/deandevl/RspatialPkg)"
+---
+
+# Mapping Census data with R
+
+Load the Required R Packages:
+
+```{r}
+#| warning: false
+#| message: false
+
+library(usmap)
+library(data.table)
+library(gt)
+library(purrr)
+library(ggplot2)
+library(RColorBrewer)
+library(magrittr)
+library(httr)
+library(here)
+library(sf)
+library(tmap)
+library(RplotterPkg)
+library(RspatialPkg)
+library(RcensusPkg)
+```
+
+::: task
+Establish an output directory for all downloaded shapefiles. Set tmap to interactive mode.
+:::
+```{r}
+output_dir <- file.path(here(), "shapefiles")
+tmap::tmap_mode("view")
+```
+
+## Using geometry in tidycensus (RcensusPkg)
+
+::: task
+Get the tract based median household income ("B19013_001E") for the District of Columbia and join it as a mapping fill aesthetic for each of the geometries of the DC tracts.
+:::
+
+Get the DC median household income by tract for 2020
+
+```{r}
+dc_fips <- usmap::fips(state = "dc")
+dc_B19013_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = "B19013_001E",
+  region = "tract",
+  regionin = paste0("state:", dc_fips)
+) %>%
+  .[B19013_001E != -666666666, ] %>%
+  data.table::setnames(., old = "B19013_001E", new = "median_income") %>% 
+  .[, median_income := as.numeric(median_income)]
+```
+
+Join the data `dc_B19013_dt` with DC's simple feature tract geometries:
+
+```{r}
+dc_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  output_dir = output_dir,
+  state = dc_fips,
+  datafile = dc_B19013_dt,
+  datafile_key = "GEOID",
+  sf_info = F
+)
+```
+
+Map the median household incomes as the fill aesthetic for the DC tract geometries of the simple feature dataframe `dc_tracts_sf`:
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.1 Base R plot of median household income by tract in DC
+
+dc_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = dc_tracts_sf,
+  aes_fill = "median_income",
+  subtitle = "Median Income Across District of Columbia Tracts",
+  legend_key_width = 0.75
+) +
+ggplot2::scale_fill_gradientn(
+  colors = RColorBrewer::brewer.pal(n = 9, name = "Greens"),
+  n.breaks = 8
+)
+dc_tracts_plot
+```
+
+## Map-making with ggplot2 and geom_sf
+
+### Choropleth mapping
+
+::: task
+Get the median age by state and map it across state geometries.
+:::
+
+Get the median age for each state (i.e. "B01002_001E"):
+
+```{r}
+states_median_age_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2019,
+  vars = "B01002_001E",
+  region = "state"
+) %>%
+  data.table::setnames(., old = "B01002_001E", new = "median_age") %>%
+  .[, median_age := as.numeric(median_age)]
+```
+
+```{r}
+#| fig-width: 14
+#| fig-height: 10
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.3 US choropleth map with ggplot2 defaults
+
+RcensusPkg::plot_us_data(
+  df = states_median_age_dt,
+  states_col = "NAME",
+  value_col = "median_age",
+  output_dir = output_dir
+)
+```
+
+### Customizing ggplot2 maps
+
+:::task
+Change the color palette and reverse it so that darker colors represent older areas.
+:::
+
+```{r}
+#| fig-width: 14
+#| fig-height: 10
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.4 Styled choropleth of US median age with ggplot2
+
+RcensusPkg::plot_us_data(
+  df = states_median_age_dt,
+  states_col = "NAME",
+  value_col = "median_age",
+  output_dir = output_dir,
+  scale_breaks = seq(30,50,5),
+  scale_colors = RColorBrewer::brewer.pal(8,"RdPu"),
+  scale_limits = c(30,50),
+  scale_labels = c("Age:30","Age:35","Age:40","Age:45","Age:50")
+)
+```
+
+## Map-making with tmap
+
+::: task
+Establish some Census data.
+:::
+
+Obtain race and ethnicity population data from the 2020 decennial US Census. Include non-Hispanic white, non-Hispanic Black, Asian, and Hispanic populations for Census tracts in Hennepin County, Minnesota.
+
+```{r}
+minn_henn_fips <- usmap::fips(state = "minnesota", county = "hennepin")
+minn_fips <-  substr(minn_henn_fips, 1, 2)
+henn_cty_fips <- substr(minn_henn_fips, 3, 5)
+vars <- c("P2_001N", "P2_002N", "P2_005N", "P2_006N", "P2_007N", "P2_008N")
+#var_names <- c("summary_value", "Hispanic", "White", "Black", "Native", "Asian")
+
+hennepin_race_dt <- RcensusPkg::get_vintage_data(
+  dataset = "dec/pl",
+  vintage = 2020,
+  vars = vars,
+  region = "tract",
+  regionin = paste0("state:", minn_fips, "+county:", henn_cty_fips)
+) %>% 
+  .[, .(NAME, GEOID, P2_001N, P2_002N, P2_005N, P2_006N, P2_007N, P2_008N)]
+```
+
+Reshape the race/ethnic estimates and summary("P2_001N") to the long form:
+```{r}
+value_long_dt <- RcensusPkg::wide_to_long(
+  dt = hennepin_race_dt,
+  measure_v = c("P2_002N", "P2_005N", "P2_006N", "P2_007N", "P2_008N"),
+  value_name = "value"
+) %>% 
+  .[, value := as.numeric(value)]
+
+summary_value_long_dt <- RcensusPkg::wide_to_long(
+  dt = hennepin_race_dt,
+  measure_v = "P2_001N",
+  value_name = "summary_value"
+) %>% 
+  .[, summary_value := as.numeric(summary_value)] %>% 
+  .[, .(GEOID,summary_value)]
+```
+
+Perform some simple wrangling:
+```{r}
+value_long_dt <- value_long_dt %>% 
+  .[, variable := fcase(
+    variable == "P2_002N","Hispanic",
+    variable == "P2_005N","White",
+    variable == "P2_006N","Black",
+    variable == "P2_007N","Native",
+    variable == "P2_008N","Asian"
+  )] 
+```
+Perform a join between `value_long_dt` and `summary_value_long_dt` and compute the percentages:
+```{r}
+data.table::setkeyv(value_long_dt,cols = "GEOID")
+data.table::setkeyv(summary_value_long_dt, cols = "GEOID")
+value_long_dt <- value_long_dt[summary_value_long_dt] %>% 
+  .[, percent := 100 * value/summary_value]
+```
+
+Get the geometries for the tracts in Hennepin County, Minnesota and join it with `value_long_dt`:
+
+```{r}
+minn_tracts_express <- expression(COUNTYFP == henn_cty_fips)
+minn_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = minn_fips,
+  express = minn_tracts_express,
+  datafile = value_long_dt,
+  datafile_key = "GEOID",
+  sf_info = T,
+  output_dir = output_dir
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, .(GEOID,NAME,variable,value,summary_value,percent,geometry)] %>% 
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Table 6.1: Race and ethnicity in Hennepin County, MN, "dec/pl", 2020
+
+minn_tracts_gt <- RplotterPkg::create_table(
+  x = data.table::as.data.table(minn_tracts_sf) %>% 
+    .[1:6,.(GEOID,NAME,variable,value,summary_value,percent)],
+  container_width_px = 500
+)
+minn_tracts_gt
+```
+
+### Choropleth maps with tmap
+
+:::task
+Before using tmap, we will filter the shapefile `minn_tracts_sf` on the black race and produce a static choropleth ggplot2 map of tract percentages in Hennepin, County.
+:::
+
+```{r}
+black_tracts_sf <- data.table::as.data.table(minn_tracts_sf) %>%
+  .[variable == "Black", ] %>%
+  sf::st_as_sf(.)
+
+black_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = black_tracts_sf,
+  aes_fill = "percent",
+  subtitle = "Percentage of Blacks in Hennepin County, MN tracts",
+  legend_key_width = 0.75,
+  scale_breaks = seq(0,100,10),
+  scale_limits = c(0,100),
+  scale_colors = RColorBrewer::brewer.pal(n = 9, name = "Oranges"),
+  hide_x_tics = T,
+  hide_y_tics = T
+) 
+black_tracts_plot
+```
+
+:::task
+Use tmap's `tm_shape()` function to visualize the polygon layer of `black_tracts_sf`.
+:::
+```{r}
+#| code-fold: true
+#| tbl-cap: |
+#|   Figure 6.5: Basic polygon plot with tmap
+
+tmap::tm_shape(black_tracts_sf) +
+  tmap::tm_polygons()
+```
+
+
+:::task
+Use `tmap` to create an interactive choropleth map by assigning *col = "percent"*.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.6 Basic choropleth with tmap,"dec/pl", 2020
+
+tmap::tm_shape(black_tracts_sf) +
+  tmap::tm_polygons(col = "percent") 
+```
+
+> The default classification scheme used by `tm_fill()` is "pretty", which identifies clean-looking intervals in the data based on the data range. In this example, data classes change every 20 percent. However, this approach will always be sensitive to the distribution of data values.
+
+:::task
+Take a look at the distribution of "percent" with a histogram setting bin breaks at 10 from 0 to 80.
+:::
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.7 Base R histogram of percent Black by Census tract,"dec/pl",2020
+
+RplotterPkg::create_histogram_plot(
+  df = black_tracts_sf,
+  aes_x = "percent",
+  title = "Histogram of black_tracts$percent",
+  x_title = "black_tracts$percent",
+  y_title = "Frequency",
+  bin_breaks = seq(0,80,10),
+  bar_fill = "green",
+)
+```
+
+> As the histogram illustrates, most Census tracts in Hennepin County have Black populations below 20 percent.
+
+:::task
+Use quantiles for classification of "percent" where each bin will contain the same number of tracts.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.8 tmap choropleth with options,"dec/pl",2020
+
+tmap::tm_shape(black_tracts_sf) +
+  tmap::tm_polygons(
+    col = "percent",
+    style = "quantile",
+    n = 5,
+    palette = "Purples",
+    title = "Percent Black\nby Census tract"
+  ) +
+  tmap::tm_layout(
+    frame = F,
+    legend.outside = T
+  )
+```
+
+> ...quantiles reveals additional neighborhood-level heterogeneity in Hennepin County's Black population in suburban areas. However, it does mask some heterogenity in Minneapolis as the top class now includes values ranging from 21 percent to 88 percent.
+
+:::task
+Use Jenks natural-breaks method, which uses an algorithm to identify meaningful breaks in the data for bin boundaries.
+:::
+
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.9 Styled tmap choropleth,"dec/pl",2020
+
+tmap::tm_shape(black_tracts_sf) +
+  tmap::tm_polygons(
+    col = "percent",
+    style = "jenks",
+    n = 5,
+    palette = "Purples",
+    title = "Percent Black\nby Census tract",
+  ) +
+  tmap::tm_layout(
+    title = "2020 US Census",
+    legend.outside= T,
+    legend.frame = F,
+    legend.hist.height = 5,
+    fontfamily = "Verdana"
+  ) 
+```
+
+
+### Adding reference elements to a map
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.10 Map of percent Black in Hennepin County with reference elements,"dec/pl",2020
+
+tmap::tmap_mode("plot")
+tmap::tm_shape(black_tracts_sf) +
+  tmap::tm_polygons(
+    col = "percent",
+    style = "jenks",
+    n = 5,
+    palette = "Purples",
+    title = "Percent Black\nby Census tract",
+    alpha = 0.7
+  ) +
+  tmap::tm_layout(
+    frame = F,
+    legend.outside = T
+  ) +
+  tmap::tm_scale_bar(
+    position = c("left","bottom")
+  ) +
+  tmap::tm_compass(
+    position = c("right","top")
+  ) +
+  tmap::tm_credits(
+    "(c) RDean ",
+    bg.color = "white",
+    position = c("RIGHT","BOTTOM")
+  )
+```
+
+### Choosing a color palette
+
+For reading.
+
+### Alternative map types with tmap
+
+#### Graduated symbols
+> Graduated symbol maps use shapes referenced to geographi units that are sized relative to a data attribute.
+
+:::task
+Use tmap's `tm_bubbles()` function to create a graduated symbol map of the "value" (i.e. the population across tracts) from `black_tracts_sf`. 
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.15 Graduated symbols with tmap, "dec/pl",2020
+
+tmap::tmap_mode("view")
+tmap::tm_shape(black_tracts_sf) +
+  tm_polygons() +
+  tm_bubbles(
+    size = "value",
+    alpha = 0.5,
+    col = "navy",
+    title.size = "Non-Hispanic Black - 2020 US Census"
+  ) +
+  tm_layout(
+    legend.outside = T,
+    legend.outside.position = "bottom"
+  )
+```
+
+#### Faceted maps
+:::task
+Complete a faceted map showing the percentages `percent` across all ethnic/race groups ('variable') from `minn_tracts_sf`. 
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.16 Faceted map with tmap
+
+tmap::tmap_mode("plot") +
+tmap::tm_shape(minn_tracts_sf) +
+  tmap::tm_facets(
+    by = "variable",
+    scale.factor = 4
+  ) +
+  tmap::tm_fill(
+    col = "percent",
+    style = "quantile",
+    n = 6,
+    palette = "Blues",
+    title = "Percent (2020 US Census)"
+  ) +
+  tmap::tm_layout(
+    bg.color = "grey",
+    legend.position = c(-0.7, 0.15),
+    panel.label.bg.color = "white"
+  )
+```
+
+#### Dot-density maps
+This section currently skipped.
+
+## Cartographic workflows with non-Census data
+
+### National election mapping with tigris(ggplot2) shapes
+
+Data source: https://cookpolitical.com/2020-national-popular-vote-tracker
+
+::: task
+Read data from the Cook Political Report on the 2020 US Presidential election results.
+:::
+
+```{r}
+election_data_path <- file.path(here(), "6_Mapping_Census_data_with_R", "data", "us_vote_2020.csv")
+vote2020_dt <- data.table::fread(file = election_data_path)
+names(vote2020_dt)
+```
+
+::: task
+Map the election "called" column data across the US state geometries *RcensusPkg::plot_us_data()*.
+:::
+
+Change the name of column "state" to "NAME" and set the "called" column as a factor:
+```{r}
+vote2020_dt[, `:=`(called = as.factor(called))] %>%
+  data.table::setnames(old = "called", new = "Party")
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 6.18 Map of the 2020 US presidential election results with ggplot2
+
+RcensusPkg::plot_us_data(
+  df = vote2020_dt,
+  states_col = "state",
+  value_col = "Party",
+  output_dir = output_dir,
+  scale_breaks = c("R","D"),
+  scale_values = c("red","blue"),
+  sf_color = "white"
+)
+```
+
+### Understanding and working with ZCTAs
+This section is currently skipped.
+
+### Conclusion
+This concludes the notes on Chapter 6, part 1 "Mapping Census data with R".

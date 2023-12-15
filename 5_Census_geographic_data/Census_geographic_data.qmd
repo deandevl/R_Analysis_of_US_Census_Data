@@ -1,0 +1,774 @@
+---
+title: "Notes on 'Analyzing US Census Data"
+author: "Rick Dean"
+format: 
+  html:
+    toc: false
+    toc-depth: 4
+    toc-location: "right"
+    number-sections: true
+    number-offset: 4
+    self-contained: true
+    smooth-scroll: true
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    code-overflow: wrap
+    tbl-cap-location: "bottom"
+    fig-width: 7
+    fig-asp: 0.6
+    fig-align: "center"
+    fig-cap-location: "bottom"
+    css: ../style.css
+    link-external-newwindow: true
+    abstract-title: "Abstract"
+    abstract: "The following are notes and R script based on Chapter 5 of the book [Analyzing US Census Data: Methods, Maps, and Models in R](https://walker-data.com/census-r/index.html) by Kyle Walker with its presentation of examples and exercises. The R packages [RcensusPkg](https://github.com/deandevl/RcensusPkg) and [data.table](https://cran.r-project.org/web/packages/data.table/index.html) are used in accessing and manipulating the data respectively.  Graphics support is from the ggplot2 based [RspatialPkg](https://github.com/deandevl/RspatialPkg). The tables are created by using the R package [RplotterPkg::create_table()](https://github.com/deandevl/RplotterPkg). The mapping of the geographic datasets (shapefiles) was accomplished using [RspatialPkg::get_geom_sf()](https://github.com/deandevl/RspatialPkg)"
+---
+
+# Census geographic data and applications in R
+
+Load the Required R Packages:
+
+```{r}
+#| warning: false
+#| message: false
+
+library(usmap)
+library(data.table)
+library(gt)
+library(purrr)
+library(ggplot2)
+library(magrittr)
+library(httr)
+library(here)
+library(sf)
+library(crsuggest)
+library(mapview)
+library(RColorBrewer)
+library(RplotterPkg)
+library(RspatialPkg)
+library(RcensusPkg)
+```
+
+## Basic usage of `tigris` (RCensusPkg::)
+
+:::task
+Define an output directory for acquiring downloaded shapefiles from the Census Bureau.
+:::
+```{r}
+output_dir <- file.path(here(), "shapefiles")
+```
+
+The function `RcensusPkg::tiger_states_sf()` (and the other similar `RcensusPkg::tiger_` functions) perform three tasks:
+
+1. Download a shapefile from the US Census Bureau.
+
+2. Read the shapefile where it is converted to a simple feature object(sf) using the `sf::st_read()` function.
+
+3. Return the `sf` object to the caller and optionally display on the console information about the sf.
+
+::: task
+Get the simple feature object that contains the boundary geometries for US states.
+:::
+
+Download from the US Census Bureau the shapefile of US states and return the resulting simple feature object(sf):
+
+```{r}
+states_sf <- RcensusPkg::tiger_states_sf(resol = "20m", output_dir = output_dir)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.1: Default US states data obtained with RcensusPkg::tiger_states_sf
+
+
+
+states_plot <- RspatialPkg::get_geom_sf(
+  sf = states_sf,
+  title = "US State Boundaries",
+  sf_fill = "blue",
+  sf_alpha = 0.7
+) 
+# ggplot2::coord_sf(
+#   xlim = c(-179.0, -60.0),
+#   ylim = c(15.0, 72.0)
+# )
+states_plot
+```
+
+> Other Census datasets may be available by state or by county within the state. In some cases, this subsetting is optional; in other cases, state and/or county arguments will be required.
+
+::: task
+Show the counties of New Mexico.
+:::
+
+Download the shapefile for all US counties from the Census Bureau and return simple feature(sf) object for New Mexico:
+
+```{r}
+nm_fips <- usmap::fips(state = "new mexico")
+nm_express <- expression(STATEFP == nm_fips)
+nm_counties_sf <- RcensusPkg::tiger_counties_sf(
+  resol = "20m",
+  express = nm_express,
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.2: County boundaries in New Mexico
+
+nm_counties_plot <- RspatialPkg::get_geom_sf(
+  sf = nm_counties_sf
+)
+nm_counties_plot
+```
+
+> Statistical entities and geographic features are similarly accessible if they exist in the TIGER/Line database.
+
+::: task
+Show the Census tract boundaries of Los Alamos, New Mexico.
+:::
+
+Download the county's shapefile and return its simple feature object(sf):
+
+```{r}
+nm_los_alamos_fips <- usmap::fips(state = "new mexico", county = "los alamos")
+nm_fips <- substr(nm_los_alamos_fips, 1, 2)
+los_alamos_fips <- substr(nm_los_alamos_fips, 3, 5)
+
+la_tracts_express <- expression(COUNTYFP == los_alamos_fips)
+la_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = nm_fips,
+  express = la_tracts_express,
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.3: Census tract boundaries in Los Alamos County, NM
+
+la_tracts_plot <- RspatialPkg::get_geom_sf(sf = la_tracts_sf)
+la_tracts_plot
+```
+
+Several geographic features are available as well, including roads and water features.
+
+::: task
+Show water features of Los Alamos, New Mexico.
+:::
+
+Download the shapefile for area water in Los Alamos, New Mexico and return its simple feature object(sf):
+
+```{r}
+nm_los_alamos_fips <- usmap::fips(state = "new mexico", county = "los alamos")
+nm_fips <- substr(nm_los_alamos_fips, 1, 2)
+los_alamos_fips <- substr(nm_los_alamos_fips, 3, 5)
+
+los_alamos_area_water_sf <- RcensusPkg::tiger_water_sf(
+  state = nm_fips,
+  county = los_alamos_fips,
+  entity = "area",
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.4: Water area in Los Alamos County, NM
+
+los_alamos_area_water_plot <- RspatialPkg::get_geom_sf(
+  sf = los_alamos_area_water_sf
+)
+los_alamos_area_water_plot 
+```
+
+### Understanding tigris(RcensusPkg) and simple features
+
+> As mentioned earlier, sf represents vector spatial data much like a regular R data frame, but with a special column, geometry, that represents the shape of each feature. When a simple features object is printed, the information above the data frame gives some additional geographic context to the coordinates in the geometry column. This includes a geometry type, a bounding box, and a coordinate reference system (CRS) definition.
+
+#### Points
+
+::: task
+Acquire landmark point data for the District of Columbia.
+:::
+
+Download the shapefile for DC landmarks and return the simple feature landmark geometries:
+
+```{r}
+dc_fips <- usmap::fips(state = "dc")
+dc_landmarks_sf <- RcensusPkg::tiger_landmarks_sf(
+  state = dc_fips, 
+  sf_info = F,
+  output_dir = output_dir
+)
+dc_landmarks_sf <- data.table::as.data.table(dc_landmarks_sf) %>%
+  na.omit(., cols = "FULLNAME") %>%
+  sf::st_as_sf(.)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.5: Census landmarks in Washington, DC
+
+dc_landmarks_plot <- RspatialPkg::get_geom_sf(
+  sf = dc_landmarks_sf,
+  sf_shape = 1,
+  sf_size = 4
+)
+dc_landmarks_plot
+```
+
+#### Lines
+
+::: task
+Acquire road line data for the District of Columbia.
+:::
+
+Download the roads shapefile and return the roads simple feature object(sf) for DC:
+
+```{r}
+dc_fips <- usmap::fips(state = "dc")
+dc_roads_sf <- RcensusPkg::tiger_roads_sf(
+  state = dc_fips,
+  entity = "state_roads",
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.6: Primary and secondary roads in Washington, DC
+
+dc_roads_plot <- RspatialPkg::get_geom_sf(sf = dc_roads_sf)
+dc_roads_plot
+```
+
+#### Polygons
+
+::: task
+Acquire the Census Bureau's block group geometries for the District of Columbia.
+:::
+
+Get the block groups simple feature for DC:
+
+```{r}
+dc_fips <- usmap::fips(state = "dc")
+dc_block_groups_sf <- RcensusPkg::tiger_block_groups_sf(
+  state = dc_fips, 
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.7: Block groups in Washington, DC
+
+dc_block_groups_plot <- RspatialPkg::get_geom_sf(sf = dc_block_groups_sf)
+dc_block_groups_plot
+```
+
+## Plotting geographic data
+
+### ggplot2 and geom_sf()
+
+::: task
+Map both the tracts and block groups of Los Alamos, NM side by side.
+:::
+
+Get the simple feature tracts for Los Alamos:
+
+```{r}
+nm_los_alamos_fips <- usmap::fips(state = "new mexico", county = "los alamos")
+nm_fips <- substr(nm_los_alamos_fips, 1, 2)
+los_alamos_fips <- substr(nm_los_alamos_fips, 3, 5)
+
+la_tracts_express <- expression(COUNTYFP == los_alamos_fips)
+la_tracts_sf <- RcensusPkg::tiger_tracts_sf(
+  state = nm_fips,
+  express = la_tracts_express,
+  general = T,
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+Get the simple feature block groups for Los Alamos:
+
+```{r}
+la_blockgroups_express <- expression(COUNTYFP == los_alamos_fips)
+la_blockgroups_sf <- RcensusPkg::tiger_block_groups_sf(
+  state = nm_fips,
+  express = la_blockgroups_express,
+  general = T,
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.10: Comparing Census tracts and block groups
+
+la_tracts_plot <- RspatialPkg::get_geom_sf(
+  sf = la_tracts_sf, 
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+la_blockgroups_plot <- RspatialPkg::get_geom_sf(
+  sf = la_blockgroups_sf, 
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+
+layout <- list(
+  plots = list(tracts = la_tracts_plot, block_groups = la_blockgroups_plot),
+  rows = c(1, 1),
+  cols = c(1, 2)
+)
+enumerations_plot <-  RplotterPkg::multi_panel_grid(
+  layout = layout,
+  title = "Enumerations for Los Alamos, NM",
+  plot_titles = c("Census tracts","Block groups")
+)
+enumerations_plot
+```
+
+### Interactive viewing with mapview
+
+::: task
+Visualize the geometries of `la_tracts_sf` using `mapview::mapview()`.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.11: Interactive view of Los Alamos, NM
+
+mapview::mapview(la_tracts_sf)
+```
+
+## tigris (RcensusPkg) workflows
+
+### TIGER/Line and cartographic boundary shapefiles
+
+Additional options to RcensusPkg include downloading generalized cartographic boundary shapefiles.
+
+::: task
+Map both the TIGER/Line and cartographic boundary(general) version of Michigan's counties.
+:::
+
+Get the TIGER/Line shapefile counties for Michigan and return a simple feature(sf):
+
+```{r}
+mich_fips <- usmap::fips(state = "michigan")
+mich_express <- expression(STATEFP == mich_fips)
+mich_counties_sf <- RcensusPkg::tiger_counties_sf(
+  express = mich_express,
+  general = F,
+  sf_info = F,
+  output_dir = output_dir
+)
+
+mich_counties_plot <- RspatialPkg::get_geom_sf(
+  sf = mich_counties_sf,
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+```
+
+Get the generalized version of Michigan counties shapefile and return a simple feature(sf):
+
+```{r}
+mich_fips <- usmap::fips(state = "michigan")
+mich_express <- expression(STATEFP == mich_fips)
+mich_counties_general_sf <- RcensusPkg::tiger_counties_sf(
+  express = mich_express,
+  general = TRUE,
+  sf_info = F,
+  output_dir = output_dir
+)
+
+mich_counties_general_plot <- RspatialPkg::get_geom_sf(
+  sf = mich_counties_general_sf,
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+```
+
+Map both the TIGER/Line and cartographic boundary files side-by-side for comparison.
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.12: Comparison of TIGER/Line and cartographic boundary files for Michigan counties
+
+layout <- list(
+  plots = list(tiger = mich_counties_plot, general = mich_counties_general_plot),
+  rows = c(1,1),
+  cols = c(1,2)
+)
+mich_cty_tiger_general_plot <- RplotterPkg::multi_panel_grid(
+  layout = layout,
+  plot_titles = c("TIGER/Line","Cartographic boundary")
+)
+mich_cty_tiger_general_plot
+```
+
+> As the cartographic boundary file shows islands and a distinct coastline, it will be a better option for most thematic mapping projects.
+
+When `general = TRUE` in RcensusPkg's tiger related functions you can also set the `resol = ` parameter to three different levels of resolution, "500k" (the default), "5m", and "20m".
+
+### Caching tigris data
+No scripts for this section
+
+### Understanding yearly differences in TIGER/Line files
+
+::: task
+Map the tracts of Tarrant County, Texas across years 1990, 2000, 2010, 2020.
+:::
+
+```{r, message=FALSE, warning=FALSE}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.13: Tarrant County, TX Census tracts, 1990-2020
+
+years <- c(1990, 2000, 2010, 2020)
+set_crs <- c(4326, 4326, 4326, 4326)
+vars <- c("CO", "COUNTY", "COUNTY", "COUNTYFP")
+tx_tarrant_fips <- usmap::fips(state = "texas", county = "tarrant")
+tx_fips <- substr(tx_tarrant_fips, 1, 2)
+tarrant_fips <- substr(tx_tarrant_fips, 3, 5)
+
+build_plot <- function(id, years, set_crs, vars, state_fips, county_fips, output_dir){
+  tx_tracts_sf <-  RcensusPkg::tiger_tracts_sf(
+    state = state_fips,
+    vintage = years[[id]],
+    general = T,
+    set_crs = set_crs[[id]],
+    output_dir = output_dir,
+    sf_info = F
+  )
+
+  col_name <- vars[[id]]
+  tarrant_tracts_sf <- data.table::as.data.table(tx_tracts_sf) %>%
+    .[.[[col_name]] == county_fips, ] %>%
+    sf::st_as_sf(.)
+
+  tarrant_tracts_plot <- RspatialPkg::get_geom_sf(
+    sf = tarrant_tracts_sf,
+    hide_x_tics = T,
+    hide_y_tics = T
+  )
+  
+  title <- paste0(years[[id]], ": ", nrow(tarrant_tracts_sf), " tracts")
+  
+  return(list(title = title, plot = tarrant_tracts_plot))
+}
+
+plot_lst <-  1:4 |>
+  purrr::map(\(x) build_plot(
+    x,
+    years = years,
+    set_crs = set_crs,
+    vars = vars,
+    state_fips = tx_fips,
+    county_fips = tarrant_fips,
+    output_dir = output_dir
+  ))
+plot_flat_lst <- purrr::flatten(plot_lst)
+titles_lst <- purrr::keep(plot_flat_lst, names(plot_flat_lst) == "title")
+plots_lst <- purrr::keep(plot_flat_lst, names(plot_flat_lst) == "plot")
+
+layout <- list(
+  plots = plots_lst,
+  rows = c(1, 1, 2, 2),
+  cols = c(1, 2, 1, 2)
+)
+
+RplotterPkg::multi_panel_grid(
+  layout = layout,
+  plot_titles = as.vector(titles_lst)
+)
+```
+
+### Combining tigris datasets
+No scripts for this section
+
+## Coordinate reference systems
+
+::: task
+Retrieve the default crs (i.e. NAD83) of Florida counties simple feature using `sf::st_crs()`.
+:::
+
+```{r}
+florida_fips <- usmap::fips(state="florida")
+florida_express <- expression(STATEFP == florida_fips)
+florida_counties_sf <- RcensusPkg::tiger_counties_sf(
+  express = florida_express,
+  general = T,
+  sf_info = F,
+  output_dir = output_dir
+)
+
+print(sf::st_crs(florida_counties_sf))
+```
+
+### Using the crsuggest package
+
+::: task
+Show the suggestions for `florida_counties_sf`.
+:::
+
+```{r}
+#| code-fold: true
+florida_counties_suggest_df <- crsuggest::suggest_crs(florida_counties_sf)
+
+florida_crs_gt <- RplotterPkg::create_table(
+  x = florida_counties_suggest_df,
+  container_width_px = 800
+)
+florida_crs_gt
+```
+
+> The “best choice” is the CRS “Florida GDL Albers” coordinate reference system, which is available with four different variations on the NAD1983 datum.
+
+It appears that "NAD83(HARN) / Florida GDL Albers" with crs code 3087 is the best choice.
+
+::: task
+Transform the crs geometries of `florida_counties_sf` to 3087 (i.e. NAD83(HARN)) using `sf::st_transform()`.
+:::
+
+```{r}
+florida_counties_3087_sf <- sf::st_transform(florida_counties_sf, crs = 3087)
+head(florida_counties_3087_sf)
+```
+
+> Note that the coordinates for the bounding box and the feature geometry have changed to much larger numbers; they are expressed in meters rather than the decimal degrees used by the NAD83 geographic coordinate system.
+
+### Plotting with `ggplot2::coord_sf()`
+
+::: task
+Use `ggplot2::coord_sf()` to modify `florida_counties_sf` with crs 3087 without having to transform it and map with datum = 3087.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.14: ggplot2 map with CRS specified
+
+florida_counties_3087_plot <- RspatialPkg::get_geom_sf(florida_counties_sf) +
+    ggplot2::coord_sf(crs = 3087, datum = 3087)
+florida_counties_3087_plot
+```
+
+## Working with geometries
+
+### Shifting and rescaling geometry for national US mapping
+
+::: task
+Show the default geometries for the US states from the Census Bureau.
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.16: Default CRS for US states
+
+us_states_sf <- RcensusPkg::tiger_states_sf(
+  general = T, 
+  resol = "20m", 
+  sf_info = F,
+  output_dir = output_dir)
+
+us_states_plot <- RspatialPkg::get_geom_sf(
+  sf = us_states_sf,
+  panel_border_color = NA,
+  hide_x_tics = T,
+  hide_y_tics = T
+)
+us_states_plot
+```
+
+> The plot does not work well, in part because the Aleutian Islands in far west Alaska cross the 180 degree line of longitude and are plotted on the opposite side of the map.
+
+::: task
+Use a coordinate reference appropriate for the United States such as the continental US Albers Equal Area projection ("ESRI:102003").
+:::
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.17: Equal-area CRS for US states
+
+us_states_crs_plot <- RspatialPkg::get_geom_sf(
+  sf = us_states_sf,
+  panel_border_color = NA,
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+ggplot2::coord_sf(crs = "ESRI:102003")
+us_states_crs_plot
+```
+
+> While this representation puts all territories in their appropriate locations, it is clearly not appropriate for Alaska, Hawaii, and Puerto Rico which appear distorted. This coordinate reference system is also not ideal for comparative mapping of states given the large amount of blank space between the states on the map.
+
+:::task
+Show the states representation using `RcensusPkg::plot_us_data()`.
+:::
+```{r}
+#| fig-width: 14
+#| fig-height: 10
+#| fig-cap: |
+#|   Figure 5.19: US states using RcensusPkg::plot_us_data()
+ 
+RcensusPkg::plot_us_data(
+  output_dir = output_dir,
+  title = "A Default Mapping of US States"
+)
+```
+
+
+### Converting polygons to points
+
+::: task
+Convert and map the polygon geometries of major Texas places to points.
+:::
+
+Get the Texas state boundary lines:
+
+```{r}
+texas_fips <- usmap::fips(state = "texas")
+texas_express <- expression(STATEFP == texas_fips)
+texas_sf <- RcensusPkg::tiger_states_sf(
+  express = texas_express,
+  general = T,
+  transform_crs = 6580,
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+Get the Texas major places:
+
+```{r}
+texas_fips <- usmap::fips(state = "texas")
+major_places <- c("Dallas","Fort Worth","Houston","Austin","San Antonio","El Paso")
+texas_places_express <- expression(NAME %in% major_places)
+texas_places_sf <- RcensusPkg::tiger_places_sf(
+  state = texas_fips, 
+  general = T,
+  express = texas_places_express,
+  transform_crs = 6580, 
+  sf_info = F,
+  output_dir = output_dir
+) %>% 
+  data.table::as.data.table(.) %>% 
+  .[, NAME := ifelse(NAME == "Fort Worth", "Dallas-Fort Worth", NAME)] %>% 
+  sf::st_as_sf(.)
+```
+
+Convert the city polygon geometries to centroid points using `sf::st_centroid()`:
+
+```{r}
+texas_places_centroids_sf <- sf::st_centroid(texas_places_sf)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.21: Large cities in Texas represented as points
+
+texas_places_plot <- RspatialPkg::get_geom_sf(
+  sf = texas_sf,
+  sf_fill = "yellow",
+  sf_stroke = 2.0,
+  hide_x_tics = T,
+  hide_y_tics = T
+) +
+RspatialPkg::get_geom_sf(
+  sf = texas_places_centroids_sf,
+  sf_fill = "red",
+  sf_size = 3,
+  adding = T
+) +
+RspatialPkg::get_geom_sf(
+  sf = texas_places_centroids_sf,
+  aes_text = "NAME",
+  text_fontface = "bold.italic",
+  text_check_overlap = T,
+  text_nudge_y = -0.3,
+  adding = T
+)
+texas_places_plot
+```
+
+### Exploding multipolygon geometries to single parts
+
+::: task
+Separate the MULTIPOLYGON geometry of Lee County, Florida into 4 separate POLYGON parts.
+:::
+
+Get the MULTIPOLYGON geometry of Lee County, Florida and map it:
+
+```{r}
+florida_lee_fips <- usmap::fips(state = "florida", county = "lee")
+florida_fips <- substr(florida_lee_fips, 1,2)
+lee_fips <- substr(florida_lee_fips, 3, 5)
+lee_county_express <- expression(STATEFP == florida_fips & COUNTYFP == lee_fips)
+lee_county_sf <- RcensusPkg::tiger_counties_sf(
+  express = lee_county_express,
+  general = T,
+  sf_info = F,
+  output_dir = output_dir
+)
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.22: Lee County, Florida
+
+lee_county_plot <- RspatialPkg::get_geom_sf(
+  sf = lee_county_sf,
+  sf_fill = "#FF8C19"
+)
+lee_county_plot
+```
+
+Using `sf::st_cast()` "cast" Lee County as a POLYGON object which will create a separate row for each non-contiguous area:
+
+```{r}
+lee_singlepart_sf <- sf::st_cast(lee_county_sf, "POLYGON")
+lee_singlepart_sf
+```
+
+```{r}
+#| code-fold: true
+#| fig-cap: |
+#|   Figure 5.23: Sanibel Island, Florida
+
+sanibel_plot <-  RspatialPkg::get_geom_sf(
+ sf = sf::st_as_sf(lee_singlepart_sf[2, ]),
+ sf_fill = "#FF8C19"
+) + 
+ coord_sf(crs = 3087, datum = 3087)
+sanibel_plot
+#mapview(lee_singlepart_sf[2, ])
+```
+
+### Conclusion
+This concludes the notes on Chapter 5 "Census geographic data and applications in R".

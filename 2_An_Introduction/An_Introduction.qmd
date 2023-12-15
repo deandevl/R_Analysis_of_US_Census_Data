@@ -1,0 +1,863 @@
+---
+title: "Notes on 'Analyzing US Census Data'"
+author: "Rick Dean"
+format: 
+  html:
+    minimal: true
+    toc: true
+    toc-depth: 4
+    toc-location: "right"
+    number-sections: true
+    number-offset: 1
+    self-contained: true
+    smooth-scroll: true
+    code-block-bg: "#f1f3f5"
+    code-block-border-left: "#31BAE9"
+    cap-location: "top"
+    mainfont: Verdana
+    page-layout: "full"
+    max-width: "1000px"
+    fig-width: 8
+    fig-height: 8
+    fig-asp: 0.8
+    fig-align: "center"
+    theme: journal
+    css: ../style.css
+    editor: visual
+    link-external-newwindow: true
+    callout-appearance: simple
+    callout-icon: false
+    callout-border-left: "#22CC00"
+    abstract-title: "Abstract"
+    abstract: "The following are notes and R script based on Chapter 2 of the book [Analyzing US Census Data: Methods, Maps, and Models in R](https://walker-data.com/census-r/index.html) by Kyle Walker with its presentation of examples and exercises.  The R packages [RcensusPkg](https://github.com/deandevl/RcensusPkg) and [data.table](https://cran.r-project.org/web/packages/data.table/index.html) are used in accessing and manipulating the data respectively.  The tables are created by using R package [DT](https://rstudio.github.io/DT/#)."
+---
+
+::: {.callout-tip collapse="true"}
+## Usage notes
+
+-   To compile report inside RStudio:
+    -   open file `An_Introduction.qmd`
+    -   press \`Render\` from a recent version of RStudio
+:::
+
+# An Introduction to tidycensus (RcensusPkg)
+
+::: task
+Load the Required R Packages:
+:::
+
+```{r, warning=FALSE, message=FALSE}
+#| label: load-packages
+
+library(RcensusPkg, quietly = T)
+library(usmap, quietly = T)
+library(data.table, quietly = T)
+library(DT, quietly = T)
+library(magrittr, quietly = T)
+```
+
+## Getting started with tidycensus (RcensusPkg)
+
+Set up the census key inorder to access the Census Bureau's api. All API requests to the Census Bureau require a "key" in the http url. `RcensusPkg` will automatically attach this "key" to each request if you define an R environmental defined as "CENSUS_KEY" with a value cooresponding to your personal "key".
+
+We will also set the global options for creating tables from the *DT::* package.
+
+::: callout-tip
+## Tables
+
+Note that the displayed tables in most cases are showing the first 8 rows of the returned data frame ordered by the "NAME" column.
+:::
+
+```{r}
+census_key <- Sys.getenv("CENSUS_KEY")
+options(DT.options = list(dom = 't'))
+```
+
+### The Decennial Census
+
+::: task
+From the Decennial Census data set ("dec/sf1") get the total population for each state for 2010.
+:::
+
+We are interested in data set "dec/sf1" and variable "P001001" (which is TOTAL POPULATION) in our request to the Census Bureau.
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+```{r}
+sf1_pop_2010_dt <- RcensusPkg::get_vintage_data(
+  dataset = "dec/sf1",
+  vintage = 2010,
+  vars = "P001001",
+  region = "state"
+)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  sf1_pop_2010_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Total Population by state for 2010'
+)
+```
+
+#### Summary files in the Decennial Census
+
+::: task
+Retrieve information on the American Indian & Alaska Native population by state from the 2020 decennial Census.
+:::
+
+1\.  Use `RcensusPkg::get_vintage_data()` with arguments `vars` set to "P1_005N" and `dataset` set to "dec/pl":
+
+```{r}
+aian_2020_dt <- RcensusPkg::get_vintage_data(
+  dataset = "dec/pl",
+  vintage = 2020,
+  vars = "P1_005N",
+  region = "state"
+) %>% data.table::setorder(NAME)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  aian_2020_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Population of Indian & Alaska Native by state for 2020'
+)
+```
+
+### American Community Survey (ACS)
+
+From the ACS we are interested in "B05006_150E" and "B05006_150M" which the Census Bureau describes as
+
+> Concept -- PLACE OF BIRTH FOR THE FOREIGN-BORN POPULATION IN THE UNITED STATES
+>
+> Label -- Estimate!!Total:!!Americas:!!Latin America:!!Central America:!!Mexico
+>
+> "B05006_150E" and "B05006_150M" fetches data on the number of residents born in Mexico by state.
+
+::: task
+From the 5-year ACS survey data set ("acs/acs5") retrieve variables "B05006_150E" and "B05006_150M" for 2020 for each state.
+:::
+
+::: callout-tip
+Note that there is also a 1-year survey ("acs/acs1").
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+```{r}
+born_in_mexico_5_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = "B05006_150E", moe = "B05006_150M"),
+  region = "state"
+) %>% data.table::setorder(NAME)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  born_in_mexico_5_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Number Born in Mexico by state for 2020 (acs/acs5)'
+)
+```
+
+::: task
+Get the 1-year ACS survey of "B05006_150E" and "B05006_150M" for 2019 for each state.
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+```{r}
+born_in_mexico_1_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2019,
+  vars = list(estimate = "B05006_150E", moe = "B05006_150M"),
+  region = "state"
+) %>% data.table::setorder(NAME)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  born_in_mexico_1_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Number Born in Mexico by state for 2019 (acs/acs1)'
+)
+```
+
+We can get many related variables at once using a `group` (sometimes referred to as a "table"), defined by the Census Bureau.
+
+::: task
+Using the list of variables associated with the group/table named "B01001" (which covers sex broken down by age, from the 2015-2020 5-year ACS) get the estimated values for each by state.
+:::
+
+1\.  Use `RcensusPkg::get_vintage_data()` and set the group argument to "B01001":
+
+Some simple data wrangling includes --
+
+-   Reorder the data frame rows by the "NAME" column
+-   Set the "estimate" and "moe" columns to numeric
+-   Revalue "moe" values having -555555555 to `NA`
+
+```{r}
+B01001_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  group = "B01001",
+  region = "state"
+) %>%
+  .[order(NAME)] %>% # reorder the "NAME" column
+  .[, `:=` (estimate = as.numeric(estimate), moe = as.numeric(moe))] %>% # set "estimate","moe" as numeric columns
+  .[, moe := ifelse(moe == -555555555, NA, moe)] # for "moe" column set -555555555 values to NA
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  B01001_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = 'Table B01001 by state for 2016-2020 5-year ACS (acs/acs5)'
+)
+```
+
+## Geography and variables in tidycensus(RcensusPkg)
+
+::: task
+Get the available geography for "acs/acs5" for 2016-2020 5-year ACS.
+:::
+
+1\.  Call `RcensusPkg::get_geography()`:
+
+```{r}
+acs5_geo_dt <- RcensusPkg::get_geography(
+  dataset = "acs/acs5",
+  vintage = 2020
+)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  acs5_geo_dt[1:10,1:2], 
+  colnames = c('ID' = 1),
+  caption = 'Available geographies for 2016-2020 5-year ACS ("acs/acs5")'
+)
+```
+
+::: task
+Show the row information for the core-based statistical areas("cbsa") and zip code tabulation areas("zcta")
+:::
+
+```{r}
+DT::datatable(
+  acs5_geo_dt[geoLevelDisplay=="310" | geoLevelDisplay == "860",1:2], 
+  colnames = c('ID' = 1),
+  caption = 'Census Bureau Info on cbsa and zcta Geography Levels 2016-2020 5-year ACS'
+)
+```
+
+::: task
+Using the "cbsa" geography level find the estimates for variable "B01003_001".
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+Some simple data wrangling includes --
+
+-   Reorder the data frame rows by the "NAME" column
+-   Set the "estimate" and "moe" columns to numeric
+-   Revalue "moe" values having -555555555 to `NA`
+-   Rename column "metropolitan statistical area/micropolitan statistical area" to "metro area"
+
+```{r}
+acs5_cbsa_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = "B01003_001E", moe = "B01003_001M"),
+  region = "metropolitan statistical area/micropolitan statistical area"
+) %>%
+  .[order(NAME)] %>% # reorder the "NAME" column
+  .[, `:=` (estimate = as.numeric(estimate), moe = as.numeric(moe))] %>% # set "estimate", "moe" as numeric columns
+  .[, moe := ifelse(moe == -555555555, NA, moe)] %>%  # for "moe" column set -555555555 values to NA
+  setnames("metropolitan statistical area/micropolitan statistical area", "metro area")
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  acs5_cbsa_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "B01003_001 Estimates on 'cbsa' Geography Level for 2016-2020 5-year ACS (acs/acs5)"
+)
+```
+
+### Geographic subsets
+
+Getting Census Bureau estimates at the state and county level.
+
+::: task
+For all counties in the state of Wisconsin find the estimated household income from "acs/acs5" for 2020.
+:::
+
+1\.  Get the fips number for Wisconsin:
+
+```{r}
+wis_fips <- usmap::fips("WI")
+```
+
+2\.  Get the household income ("B19013_001E","B19013_001M") for all the counties in Wisconsin:
+
+```{r}
+wi_income_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = "B19013_001E", moe = "B19013_001M"),
+  region = "county:*",
+  regionin = paste0("state:", wis_fips)) %>% 
+  .[order(NAME)] %>% # order rows by "NAME"
+  .[, `:=` (estimate = as.numeric(estimate), moe = as.numeric(moe))] # set "estimate", "moe" as numeric columns
+```
+
+3\.  Show the table:
+
+```{r}
+DT::datatable(
+  wi_income_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "Wisconsin Counties' Household Income for 2016-2020 5-year ACS (acs/acs5)"
+)
+```
+
+::: callout-tip
+## Data frame rows count
+
+Note that we received 72 rows/observations for the 72 counties in Wisconsin in reporting household income using the ACS 5-year dataset:
+:::
+
+```{r}
+wi_income_acs5_rows <- nrow(wi_income_dt)
+```
+
+Rows from Wisconsin counties' ACS 5-year household income: `r wi_income_acs5_rows`.
+
+::: task
+Find Census Bureau household income estimates at the tract level for Dane County in Wisconsin.
+:::
+
+1\.  Get the fips numbers for Dane County and Wisconsin:
+
+```{r}
+wi_dane_fips <- usmap::fips(state = "WI", county = "Dane")
+wi_fips <- substr(wi_dane_fips,1,2)
+dane_fips <- substr(wi_dane_fips,3,5)
+```
+
+2\.  Request the data from the "acs/acs5" dataset:
+
+```{r}
+dane_income_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = "B19013_001E", moe = "B19013_001M"),
+  region = "tract:*",
+  regionin = paste0("state:", wi_fips, "+county:", dane_fips)) %>% 
+  .[order(tract)] %>%
+  .[, `:=` (estimate = as.numeric(estimate), moe = as.numeric(moe))] # set "estimate", "moe" as numeric columns
+```
+
+3\.  Show the table:
+
+```{r}
+DT::datatable(
+  dane_income_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "Dane County, Wisconsin Household Income for 2016-2020 5-year ACS (acs/acs5)"
+)
+```
+
+We noted above that for county household income in Wisconsin we obtained 72 rows from the 5-year ACS.
+
+::: task
+How many rows would we obtain requesting the same data from the American Community Survey: 1-Year Estimates("acs/acs1")?
+:::
+
+1\.  Repeat the above request for the 1-year ACS dataset:
+
+```{r}
+wi_income_1yr_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2019,
+  vars = list(estimate = "B19013_001E", moe = "B19013_001M"),
+  region = "county:*",
+  regionin = paste0("state:", wis_fips)
+)
+```
+
+::: callout-tip
+## Data frame rows count changed
+
+Note that there are only 23 rows in the data table, representing the 23 counties that meet the "total population of 65,000 or greater" criteria for the ACS 1-year survey.
+:::
+
+```{r}
+wi_income_acs1_rows <- nrow(wi_income_1yr_dt)
+```
+
+Rows from Wisconsin counties' ACS 1-year household income: `r wi_income_acs1_rows`.
+
+## Searching for variables in tidycensus(RcensusPkg)
+
+The `RcensusPkg::get_variables()` function provides a way to determine the availability and variable IDs from the various datasets. It has a requirement for the dataset name along with optional arguments for `vintage`, `group`, and `brief` which provides a more concise output.
+
+::: callout-tip
+Be aware that `RcensusPkg::get_variables()` can be time consuming. The following request is an example of a time consumer that returns a data frame with 22858 rows of variable names.
+:::
+
+::: task
+Find the variables available under the "acs/acs5" dataset for vintage 2016.
+:::
+
+1\.  Call `RcensusPkg::get_variables()`:
+
+Simple data wrangling includes --
+
+-   Reorder rows by "NAME" column
+-   Select columns "name","label", "concept", "predicateType"
+
+```{r}
+acs5_vars_dt <- RcensusPkg::get_variables(
+  dataset = "acs/acs5",
+  vintage = 2016,
+  brief = FALSE
+)%>% 
+  .[order(name)] %>% # reorder the "name" column
+  .[, .(name, label, concept, predicateType)]
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  acs5_vars_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "Census Bureau Variables for 2016 5-year ACS (acs/acs5)"
+)
+```
+
+## Data structure in tidycensus(RcensusPkg)
+
+In calling `RcensusPkg::get_vintage_data()` the data.table outputs are in a shape called the "long" form. Alternatively we can reshape the data.table into a "wide" form where columns are defined from the unique values of a specific column. `RcensusPkg` incorporates data.table's `melt()` and `dcast()` functions in reshaping results between the "long" and "wide" formats.
+
+::: task
+Show both the "long" and "wide" forms of the variable `B19001` of the "acs/acs1" dataset by state. The `B19001` variable is defined as income groups.
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()` in the default "long" form:
+
+```{r}
+B19001_1yr_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2016,
+  group = "B19001",
+  region = "state"
+) %>% 
+  .[order(NAME)] %>%
+  .[, `:=` (estimate = as.numeric(estimate), moe = as.numeric(moe))] # set "estimate", "moe" as numeric columns
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  B19001_1yr_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "B19001 Variables for 2016 1-year ACS (acs/acs1)"
+)
+```
+
+::: callout-tip
+## Data frame dimensions
+
+Note that we are showing a data frame with 884 rows and 5 columns in addition to an "ID" column.
+:::
+
+::: task
+Repeat the call with a "wide" format on the variable.
+:::
+
+```{r}
+B19001_1yr_wide_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs1",
+  vintage = 2016,
+  group = "B19001",
+  region = "state",
+  shape = "wide"
+)
+```
+
+Show the table:
+
+```{r}
+DT::datatable(
+  B19001_1yr_wide_dt[1:8,1:8], 
+  colnames = c('ID' = 1),
+  caption = "Wide B19001 Variables for 2016 1-year ACS (acs/acs1)"
+)
+```
+
+::: callout-tip
+## Data frame dimensions for the "wide" format
+
+Note that for a "wide" format we have a data frame with 52 rows and 36 columns in addition to an "ID" column.
+:::
+
+### Understanding GEOIDs
+
+::: task
+Find the number of households in Cimarron County, Oklahoma using the GEOID block level from the 2020 Census.
+:::
+
+1\.  Get the fips numbers for Cimarron County and Oklahoma:
+
+```{r}
+ok_cim_fips <- usmap::fips(state = "OK", county = "Cimarron")
+ok_fips <- substr(ok_cim_fips,1,2)
+cim_fips <- substr(ok_cim_fips,3,5)
+```
+
+2\.  Call `RcensusPkg::get_vintage_data`:
+
+```{r}
+cimarron_blocks_dt <- RcensusPkg::get_vintage_data(
+  dataset = "dec/pl",
+  vintage = 2020,
+  vars = "H1_001N",
+  region = "block:*",
+  regionin = paste0("state:", ok_fips, "+county:", cim_fips) )%>% 
+  .[order(GEO_ID)] %>%
+  .[, value := as.numeric(value)]
+```
+
+3\.  Show the table:
+
+```{r}
+DT::datatable(
+  cimarron_blocks_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "Households in Cimarron County, OK by Census block for 2020 decennial (dec/pl)"
+)
+```
+
+### Renaming variable IDs
+
+Using the data.table package we can reassign Census IDs to new names.
+
+::: task
+Taking the counties in Georgia from the 2015-2019 five-year ACS show the median age and income.
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+```{r}
+ga_fips <- usmap::fips("GA")
+ga_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = list(estimate = c("B19013_001E", "B01002_001E"), moe = c("B19013_001M", "B01002_001M")),
+  region = "county:*",
+  regionin = paste0("state:", ga_fips)) %>%
+  .[order(NAME)] %>%
+  .[, `:=` (estimate = as.numeric(estimate), moe = as.numeric(moe))] # set "estimate", "moe" as numeric columns
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  ga_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "Median Age and Income in Georgia Counties 2020  5-year ACS (acs/acs5)"
+)
+```
+
+::: task
+Reassign column/variable values in the "variable" column of `ga_dt`.
+:::
+
+1\.  Using `data.table::ifelse` functionality is simple:
+
+```{r}
+ga_dt[, variable := ifelse(variable == "B19013_001", "medinc", "medage")]
+```
+
+2\.  Show the table again and compare:
+
+```{r}
+DT::datatable(
+  ga_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "Median Age and Income in Georgia Counties 2020  5-year ACS (acs/acs5)"
+)
+```
+
+::: task
+Request a "wide" format and easily change the variable names.
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data`:
+
+```{r}
+ga_wide_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/acs5",
+  vintage = 2020,
+  vars = c("B19013_001E", "B19013_001M","B01002_001E", "B01002_001M"),
+  shape = "wide",
+  region = "county:*",
+  regionin = paste0("state:", ga_fips)
+)
+```
+
+2\.  Change the names of the variables:
+
+```{r}
+data.table::setnames(ga_wide_dt, c("B19013_001E", "B19013_001M", "B01002_001E", "B01002_001M"), c("medincE", "medincM", "medageE", "medageM"))
+```
+
+3\.  Show the table:
+
+```{r}
+DT::datatable(
+  ga_wide_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "Median Age and Income in Georgia Counties 2020  5-year ACS (acs/acs5)"
+)
+```
+
+## Other Census Bureau datasets in tidycensus(RcensusPkg)
+
+### Using get_estimates (Data from the Population Estimates Program (PEP))
+
+PEP as described by the Census Bureau:
+
+> PEP annually utilizes current data on births, deaths, and migration to calculate population change since the most recent decennial census and produces a time series of estimates of population, demographic components of change, and housing units.
+
+::: task
+Get a listing of all the PEP related datasets for the year 2019.
+:::
+
+1\.  Call `RcensusPkg::get_dataset_names()`:
+
+```{r}
+pep_datasets_dt <- RcensusPkg::get_dataset_names(
+  filter_str = "pep",
+  year = 2019) %>%
+  .[, .(name, vintage, title)]
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  pep_datasets_dt[1:8], 
+  colnames = c('ID' = 1),
+  caption = "PEP Datasets for 2019"
+)
+```
+
+::: task
+For the county of Queens, NY request all variables that are components of change population estimates for 2019. We will be using the "pep/components" dataset.
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+```{r}
+ny_queens_fips <- usmap::fips(state = "NY", county = "Queens")
+
+queens_components_dt <- RcensusPkg::get_vintage_data(
+  dataset = "pep/components",
+  vintage = 2019,
+  vars = c("BIRTHS","DEATHS","DOMESTICMIG","INTERNATIONALMIG","NATURALINC","NETMIG","RBIRTH","RDEATH","RDOMESTICMIG","RINTERNATIONALMIG"),
+  region = paste0("county:", substr(ny_queens_fips,3,5)),
+  regionin = paste0("state:", substr(ny_queens_fips,1,2))
+) %>%
+  .[, value := as.numeric(value)]
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  queens_components_dt[1:10], 
+  colnames = c('ID' = 1),
+  caption = "PEP Datasets for 2019"
+)
+```
+
+::: task
+Variables available from the data set "pep/charagegroups" have characteristic breakdowns for Age Group, Sex, Race, and Hispanic Origin.
+:::
+
+1\.  Call `RcensusPkg::get_variables()`:
+
+```{r}
+pep_char_vars_dt <- RcensusPkg::get_variables(
+  dataset = "pep/charagegroups",
+  vintage = 2019
+)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  pep_char_vars_dt[4:18,1:2], 
+  colnames = c('ID' = 1),
+  caption = "Available PEP Characteristic Variables for 2019 (pep/charagegroups)"
+)
+```
+
+::: task
+Get the characteristics for Louisiana, 2019 found in the PEP "pep/charagegroups" dataset. We are interested in "SEX", "HISP", and "POP".
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()`:
+
+```{r}
+la_fips <- usmap::fips("LA")
+louisiana_sex_hisp_dt <- RcensusPkg::get_vintage_data(
+  dataset = "pep/charagegroups",
+  vintage = 2019,
+  vars = c("SEX","HISP","POP"),
+  shape = "wide",
+  region = paste0("state:", la_fips)) %>%
+    .[, `:=` (SEX = as.numeric(SEX), HISP = as.numeric(HISP), POP = as.numeric(POP))]
+
+```
+
+2\.  Do some minor wrangling by converting the values for variables "SEX" and "HISP" from numeric character to character:
+
+```{r}
+louisiana_sex_hisp_dt[, SEX := fcase(
+  SEX == 0, "Both sexes",
+  SEX == 1, "Male",
+  SEX == 2, "Female"
+)]
+
+louisiana_sex_hisp_dt[, HISP := fcase(
+  HISP == 0, "Both Hispanic Origins",
+  HISP == 1, "Non-Hispanic",
+  HISP == 2, "Hispanic"
+)]
+```
+
+3\.  Show the table:
+
+```{r}
+DT::datatable(
+  louisiana_sex_hisp_dt[1:9], 
+  colnames = c('ID' = 1),
+  caption = "PEP Characteristics of Louisiana for 2019 (pep/charagegroups)"
+)
+```
+
+### Using get_flows() (ACS Migration Flows API)
+
+::: task
+Get a listing of all the "flows" related data sets.
+:::
+
+1\.  Call `RcensusPkg::get_dataset_names()` for the year 2018:
+
+```{r}
+flows_datasets_dt <- RcensusPkg::get_dataset_names(
+  filter_str = "flows",
+  year = 2019)
+```
+
+2\.  Show the table:
+
+```{r}
+DT::datatable(
+  flows_datasets_dt[1,1:3], 
+  colnames = c('ID' = 1),
+  caption = "Flows Datasets Available for 2019"
+)
+```
+
+::: task
+Get a listing of the available variables from the 2018 "acs/flows" dataset.
+:::
+
+1\.  Call `RcensusPkg::get_variables()`:
+
+```{r}
+flows_vars_dt <- RcensusPkg::get_variables(
+  dataset = "acs/flows",
+  vintage = 2019
+)
+```
+
+2\.  There are 48 variables available. Show a portion of the variables from `flows_vars_dt`:
+
+```{r}
+DT::datatable(
+  flows_vars_dt[4:13,1:2], 
+  colnames = c('ID' = 1),
+  caption = "Flow Variables Available for 2019"
+)
+```
+
+::: task
+Find the migration data for Honolulu County, Hawaii and the variables "FULL1_NAME", "FULL2_NAME", "MOVEDIN", "MOVEDIN_M","MOVEDOUT", "MOVEDOUT_M","MOVEDNET","MOVEDNET_M".
+:::
+
+1\.  Call `RcensusPkg::get_vintage_data()` and consolidate 6 variables/columns (those named "MOVE...") into 2 columns (named "estimate" and "moe") using `data.table::'s` melt function:
+
+```{r}
+honolulu_fips <- usmap::fips(state = "HI", county = "Honolulu")
+honolulu_migration_dt <- RcensusPkg::get_vintage_data(
+  dataset = "acs/flows",
+  vintage = 2019,
+  vars = c("GEOID1", "GEOID2", "FULL1_NAME", "FULL2_NAME", "MOVEDIN", "MOVEDIN_M","MOVEDOUT", "MOVEDOUT_M","MOVEDNET","MOVEDNET_M"),
+  vars_init = NULL,
+  region = paste0("county:", substr(honolulu_fips,3,5)),
+  regionin = paste0("state:", substr(honolulu_fips,1,2)),
+  melt_meas = list(estimate = c("MOVEDIN","MOVEDOUT","MOVEDNET"), moe = c("MOVEDIN_M","MOVEDOUT_M","MOVEDNET_M")),
+  melt_values = c("MOVEDIN","MOVEDOUT","MOVEDNET")
+)
+```
+
+2\.  Do some minor wrangling:
+
+```{r}
+honolulu_migration_dt <- honolulu_migration_dt %>%
+  .[is.na(GEOID2)] %>%         # filter to international GEOID (i.e "GEOID2" == NA)
+  .[order(FULL2_NAME)]         # order by "FULL2_NAME"
+```
+
+3\.  Show the table:
+
+```{r}
+DT::datatable(
+  honolulu_migration_dt[1:10], 
+  colnames = c('ID' = 1),
+  caption = "Honolulu County, Hawaii Migration for 2019 (acs/flows)"
+)
+```
+
+::: callout-tip
+## Conclusion
+
+This concludes the notes on Chapter 2 "An introduction".
+:::

@@ -1,0 +1,36 @@
+
+.title {
+  font-family: Verdana;
+}
+
+.anchored {
+  font-family: Verdana;
+}
+
+.cell {
+  margin-bottom: 30px;
+}
+
+caption {
+  font-size: 0.9em;
+  font-style: italic;
+  font-weight: bold;
+  color: black;
+}
+
+.task {
+  font-size: 15pt;
+  color: #964B00;
+}
+
+.exer {
+  font-size:14pt;
+  font-weight: bold;
+  color: darkorange;
+}
+
+.takeaway {
+  font-size: 14pt;
+  font-weight: bold;
+  font-style: italic;
+}
